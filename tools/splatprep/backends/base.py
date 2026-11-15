@@ -364,19 +364,33 @@ class FeatureMatchBackend(Backend):
         return SfMOutput(rec, matching, info)
 
 
+#: A GPS survey whose fast solve places fewer than this share of the photos is solved again held to GPS, even when the
+#: placed cameras match GPS: the global mapper keeps only its largest connected part (498 of 1,229 photos on a drone
+#: survey, where the GPS-held incremental mapper placed 959).
+GPS_HELD_MIN_REGISTERED = 0.7
+
+
 def _hold_to_gps(rec, info, db_path, ctx, gps_enu):
     """A survey whose solve disagrees with its GPS (look-alike places matched to each other fold the scene; the
-    global mapper can also leave flight segments in mutually inconsistent frames) is solved again with
-    incremental mapping held to the GPS positions. The result that agrees better with GPS is kept."""
+    global mapper can also leave flight segments in mutually inconsistent frames), or that placed too few of its
+    photos, is solved again with incremental mapping held to the GPS positions. The better result is kept."""
     from ..gps import check_against_gps
     from ..mapper import gps_prior_mapper_available, run_gps_prior_mapper, write_position_priors
 
     first = check_against_gps(rec, ctx.image_dir, ctx.names)
-    if first is None or first["ok"] or not ctx.opt("gpsHeldMapping", True) or not gps_prior_mapper_available():
+    if first is None or not ctx.opt("gpsHeldMapping", True) or not gps_prior_mapper_available():
         return rec, info
-    ctx.progress.message("mapping", f"{first['badFraction']:.0%} of cameras are far from their GPS position "
-                                    f"(median {first['medianM']} m) — solving again held to GPS")
-    positions = {n: gps_enu[i] for i, n in enumerate(ctx.names)}
+    n = max(len(ctx.names), 1)
+    few = len(rec.images) < GPS_HELD_MIN_REGISTERED * n
+    if first["ok"] and not few:
+        return rec, info
+    if not first["ok"]:
+        ctx.progress.message("mapping", f"{first['badFraction']:.0%} of cameras are far from their GPS position "
+                                        f"(median {first['medianM']} m) — solving again held to GPS")
+    else:
+        ctx.progress.message("mapping", f"placed only {len(rec.images)} of {n} photos — solving again held to GPS "
+                                        "to place more")
+    positions = {nm: gps_enu[i] for i, nm in enumerate(ctx.names)}
     write_position_priors(db_path, positions)
     try:
         rec2 = run_gps_prior_mapper(db_path, ctx.image_dir, ctx.work_dir / "sparse_gps", ctx.log_path,
@@ -386,11 +400,20 @@ def _hold_to_gps(rec, info, db_path, ctx, gps_enu):
         return rec, info
     second = check_against_gps(rec2, ctx.image_dir, ctx.names)
     strip = lambda c: {k: v for k, v in (c or {}).items() if not k.startswith("_") and k not in ("outliers", "worst")}
-    info["gpsHeld"] = {"first": {"mapper": info.get("mapper"), **strip(first)}, "second": strip(second)}
-    # the GPS-held solve wins when it passes the check, or is better and keeps most of the cameras
-    if second is not None and (second["ok"] or (second["badFraction"] < first["badFraction"]
-                                                and len(rec2.images) >= 0.8 * len(rec.images))):
+    info["gpsHeld"] = {"reason": "gps" if not first["ok"] else "fewRegistered",
+                       "first": {"mapper": info.get("mapper"), "registered": len(rec.images), **strip(first)},
+                       "second": {"registered": len(rec2.images), **strip(second)}}
+    if second is None:
+        return rec, info
+    if first["ok"]:
+        # both match GPS: keep whichever placed more photos
+        better = second["ok"] and len(rec2.images) > len(rec.images)
+    else:
+        # the GPS-held solve wins when it passes the check, or is better and keeps most of the cameras
+        better = second["ok"] or (second["badFraction"] < first["badFraction"] and len(rec2.images) >= 0.8 * len(rec.images))
+    if better:
         info["mapper"] = "pose_prior_mapper"
+        ctx.progress.message("mapping", f"kept the GPS-held solve: {len(rec2.images)} photos placed")
         return rec2, info
     return rec, info
 

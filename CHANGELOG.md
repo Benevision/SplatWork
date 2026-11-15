@@ -30,6 +30,13 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
   missing". When the batches were combined in groups, the group holding dataset.json didn't have all its photos.
   Fixed on both sides: the Mac now adds dataset.json only in the final combine, and the worker (SplatWork for
   Linux 1.7.2) keeps such a group as a partial layer instead of refusing it.
+- **Drone surveys: a fast solve that places too few photos is solved again, held to GPS.** When the quick (GLOMAP)
+  solve matches GPS but places under 70 % of the photos, the cameras are solved again held to their GPS positions.
+  The new solve is kept if it also matches GPS and places more. On the 1,225-photo survey: 498 placed, then 904,
+  0.95 m from GPS.
+- **Training on a Linux worker waits for it.** When a run should start on a worker that's briefly unreachable (for
+  example updating itself), the Mac waits up to 15 minutes ("Waiting for BensPC — it may be restarting after an
+  update") instead of failing with "No Linux worker selected".
 - **Drone surveys: take-off shots left out, and a few stray cameras no longer fail the run.** Photos taken near
   the ground while the rest of the flight is well above (DJI's height above take-off: under 5 m, or under 30 % of the
   flight's usual height) are left out before the camera solve. The new switch *Leave out take-off and landing shots*

@@ -49,10 +49,6 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
 - The Vulkan trainer (default on AMD / Intel, opt-in on NVIDIA) has only run on Mesa's software driver; the
   RTX 4080 comparison (`linux/vktrain/compare_training.sh`) and the RX 6700 XT test (`AMD_TEST_STEAMOS.md`) are
   still to do. Its densification still round-trips through the CPU.
-- Drone surveys: a fast (GLOMAP) solve that matches GPS but places too few photos (498 of 1,229 on the sample) is
-  kept as it is; the GPS-held re-solve, which placed 959, only runs when the GPS check fails.
-- Training that should start on a Linux worker fails ("No Linux worker selected") if the worker is unreachable
-  at that moment (e.g. updating itself) instead of waiting.
 - The colour-correction safeguard has not yet fired on real data (healthy runs stay quiet; the failure it targets
   was seen once, on a wrong camera solve).
 - The Windows gsplat 1.6 (CUDA 12.8) wheel for RTX 50 cards is still being built in CI; RTX 50 can't train on
@@ -65,8 +61,6 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
 
 The longer plan to a public release (hardening, parity, distribution, beta) is in [ROADMAP.md](ROADMAP.md).
 
-1. **Drone solving:** run the GPS-held re-solve when a GPS survey's fast solve places too few photos; let a
-   worker-bound training start wait for the worker instead of failing.
 2. **Real-GPU checks of the Vulkan trainer** (RTX 4080 comparison, RX 6700 XT on SteamOS), then GPU densification —
    see [GPU_SUPPORT.md](GPU_SUPPORT.md).
 3. **Linux parity with the Mac:** the Projects list with stage checkpoints and resume, drone mode and the photo

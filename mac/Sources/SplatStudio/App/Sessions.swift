@@ -380,7 +380,28 @@ final class TrainingSession {
 
     private func startRemote(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, name: String) {
         guard let id = workerId ?? WorkerBrowser.shared.workers.first?.id, let client = WorkerBrowser.shared.client(for: id) else {
-            state = .failed("No Linux worker selected. Add one under Compute in the sidebar."); return
+            // The worker isn't visible right now — often it is restarting to install an update (it does that by
+            // itself when idle, e.g. right after a preparation job ends). Wait for it rather than failing.
+            let wanted = workerId
+            let label = wanted.flatMap { w in WorkerBrowser.shared.workers.first { $0.id == w }?.name }
+                ?? wanted.map { $0.replacingOccurrences(of: "manual:", with: "") } ?? "a Linux worker"
+            WorkerBrowser.shared.start()
+            state = .preparing("Waiting for \(label)")
+            task = Task { [weak self] in
+                let start = Date()
+                while Date().timeIntervalSince(start) < 15 * 60, !Task.isCancelled {
+                    if let w = wanted ?? WorkerBrowser.shared.workers.first?.id, WorkerBrowser.shared.client(for: w) != nil {
+                        self?.startRemote(dataset: dataset, config: cfg, output: output, name: name); return
+                    }
+                    let m = Int(Date().timeIntervalSince(start) / 60)
+                    self?.state = .preparing("Waiting for \(label) — it may be restarting after an update" + (m > 0 ? " (\(m) min)" : ""))
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                }
+                if Task.isCancelled { self?.state = .cancelled; return }
+                self?.state = .failed(wanted == nil ? "No Linux worker selected. Add one under Compute in the sidebar."
+                                                     : "\(label) didn't come back within 15 minutes. Check that it's on, then start training again.")
+            }
+            return
         }
         if let info = WorkerBrowser.shared.health[id]?.info,
            MemoryForecast.workerProblem(info: info, dataset: dataset, config: cfg) != nil {
