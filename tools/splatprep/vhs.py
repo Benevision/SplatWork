@@ -220,8 +220,12 @@ def overlay_mask(mean: np.ndarray, std: np.ndarray, grad: np.ndarray) -> Optiona
     the clip's thumbnails. Returns a keep mask (255 = keep, 0 = overlay) or None when nothing was found."""
     import cv2
 
-    if float(np.median(std)) < 12.0:          # the picture itself hardly changes: can't tell overlay from scene
+    med = float(np.median(std))
+    if med < 12.0:                            # the picture itself hardly changes: can't tell overlay from scene
         return None
+    # the surroundings must change about as much as the picture as a whole (relative, so a low-contrast corner of
+    # a busy clip still counts; a fixed level was too tight for one OpenCV build's rendering of the test scene)
+    ring_min = max(12.0, 0.5 * med)
     cand = ((std < 6.0) & (grad > 25.0)).astype(np.uint8)
     h, w = cand.shape
     my, mx = max(1, h // 25), max(1, w // 25)
@@ -242,7 +246,7 @@ def overlay_mask(mean: np.ndarray, std: np.ndarray, grad: np.ndarray) -> Optiona
         r = max(3, bh)
         ring = std[max(0, y - r): y + bh + r, max(0, x - r): x + bw + r].copy()
         ring[min(r, y): min(r, y) + bh, min(r, x): min(r, x) + bw] = np.nan
-        if not np.isfinite(ring).any() or float(np.nanmedian(ring)) < 20.0:
+        if not np.isfinite(ring).any() or float(np.nanmedian(ring)) < ring_min:
             continue
         pad = max(2, int(0.25 * bh))
         keep[max(0, y - pad): y + bh + pad, max(0, x - pad): x + bw + pad] = 0

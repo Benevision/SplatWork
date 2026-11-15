@@ -13,6 +13,7 @@ import argparse
 import os
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -66,12 +67,23 @@ from splatworker.gui.gtk.window import MainWindow  # noqa: E402
 failures: list = []
 
 
-def shot(win: Gtk.Widget, name: str) -> None:
+def _snapshot(win: Gtk.Widget):
     w, h = win.get_width(), win.get_height()
-    paintable = Gtk.WidgetPaintable.new(win)
     snap = Gtk.Snapshot()
-    paintable.snapshot(snap, w, h)
-    node = snap.to_node()
+    Gtk.WidgetPaintable.new(win).snapshot(snap, w, h)
+    return snap.to_node(), w, h
+
+
+def shot(win: Gtk.Widget, name: str) -> None:
+    # A slow CI runner may not have laid out and drawn the window yet: keep the main loop going for up to 15 s.
+    node, w, h = _snapshot(win)
+    deadline = time.monotonic() + 15
+    while node is None and time.monotonic() < deadline:
+        ctx = GLib.MainContext.default()
+        while ctx.pending():
+            ctx.iteration(False)
+        time.sleep(0.05)
+        node, w, h = _snapshot(win)
     if node is None:
         raise RuntimeError(f"{name}: nothing drawn")
     tex = win.get_native().get_renderer().render_texture(node, None)
