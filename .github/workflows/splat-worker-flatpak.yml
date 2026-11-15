@@ -19,6 +19,12 @@ on:
   pull_request:
     paths: ["linux/**", "tools/**", ".github/workflows/splat-worker-flatpak.yml"]
   workflow_dispatch:
+  # the Windows gsplat wheel compiles for hours, so it finishes long after the push that started both: publish again
+  # once it is cached (gsplat-windows-wheel.yml runs on main only when the pin or that workflow changes)
+  workflow_run:
+    workflows: ["gsplat Windows wheel"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -36,6 +42,7 @@ env:
 jobs:
   # Worker + Studio tests (the OpenGL viewer tests render with Mesa llvmpipe through a headless EGL context).
   tests:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -77,7 +84,7 @@ jobs:
   # profile (PyTorch 2.7.1 + CUDA 12.8, RTX 20 → RTX 50 series). Cached per pin, so this only compiles
   # when linux/flatpak/gsplat-pin.env changes.
   gsplat-wheel:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
