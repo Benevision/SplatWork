@@ -52,10 +52,15 @@ class JobContext:
     checkpoint_event: threading.Event = field(default_factory=threading.Event)
     checkpoint: Callable[[int], None] = lambda step: None
     vulkan_index: Optional[int] = None   # the slot's Vulkan device (splatwork-vk-train --device); None: its own pick
+    # processing jobs (gpulease.py): ask for the home GPU before a GPU stage — gpu_request(stage, need_mb, grant)
+    # calls grant() once the lease is given; gpu_release() hands it back. None: the job holds a GPU throughout.
+    gpu_request: Optional[Callable[[str, int, Callable[[], None]], None]] = None
+    gpu_release: Optional[Callable[[], None]] = None
 
 
 class Backend:
     pausable = False   # train jobs honour JobContext.pause_event / checkpoint_event
+    leases = False     # processing jobs use JobContext.gpu_request / gpu_release (else they hold a GPU slot)
 
     def census_available(self) -> bool:
         return True
@@ -76,6 +81,7 @@ class Backend:
 
 class SubprocessBackend(Backend):
     pausable = True
+    leases = True      # processing jobs hold a GPU only around GPU stages (gpulease.py)
 
     def __init__(self, cancel_grace_seconds: float = 30.0, trainer: str = "auto"):
         self.cancel_grace = cancel_grace_seconds
@@ -122,6 +128,7 @@ class SubprocessBackend(Backend):
         cancel = self._mp.Event()
         pause = self._mp.Event()
         ckpt = self._mp.Event()
+        granted = None
         if ctx.kind == "train" and self.trainer_choice()["trainer"] == "vulkan":
             from .vktrain import subprocess_entry
 
@@ -134,7 +141,8 @@ class SubprocessBackend(Backend):
         elif ctx.kind == "process":
             from .processing import subprocess_entry
 
-            args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), ctx.device_index, q, cancel)
+            granted = self._mp.Event() if ctx.gpu_request is not None else None
+            args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), ctx.device_index, q, cancel, granted)
         elif ctx.kind == "census":
             from .census import subprocess_entry
 
@@ -188,6 +196,11 @@ class SubprocessBackend(Backend):
                     ctx.preview(int(payload))
                 elif kind == "checkpoint":
                     ctx.checkpoint(int(payload))
+                elif kind == "gpu" and granted is not None:
+                    if payload.get("acquire"):
+                        ctx.gpu_request(str(payload["acquire"]), int(payload.get("needMB") or 0), granted.set)
+                    elif payload.get("release"):
+                        ctx.gpu_release()
                 elif kind in ("done", "cancelled", "error", "paused"):
                     outcome = (kind, payload)
                     break
@@ -196,6 +209,8 @@ class SubprocessBackend(Backend):
             if proc.is_alive():
                 proc.terminate()
                 proc.join(5)
+            if ctx.gpu_release is not None:
+                ctx.gpu_release()           # whatever happened, the lease ends with the job
         kind, payload = outcome
         if kind == "cancelled":
             raise JobCancelled()

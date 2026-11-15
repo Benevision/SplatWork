@@ -6,6 +6,13 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.6 — processing uses the GPU only for its GPU steps:** a camera solve, masks or frame
+  extraction used to hold a GPU for its whole run, so it waited behind training even for CPU work such as COLMAP
+  mapping. Processing jobs now run on the CPU (one at a time by default: *Settings → Training → Processing jobs at
+  once*) and take the GPU only for feature extraction, matching, masks and 360° resampling. A GPU step waits for
+  the GPU, or runs beside training when the GPU has enough free memory. Queued training comes first. The Jobs page
+  shows "running on the CPU" or "waiting for the GPU", and running processing jobs now show their progress and can
+  be cancelled there.
 - **SplatWork for Linux 1.7.5 — GPU speed measured under real load:** *Measure GPU speed* trained a tiny scene
   for about a second on an RTX 4080, too little to load a big GPU. It now trains the standard benchmark scene
   (48 photos of 1600×1200, 1 M splats) and times 35 s after a 10 s warm-up, about a minute per GPU, with progress

@@ -84,6 +84,7 @@ def cmd_serve(args) -> int:
         # read once and removed, so jobs' subprocesses don't inherit it
         local_secret=os.environ.pop(LOCAL_SECRET_ENV, None) or None,
         trainer=args.trainer,
+        cpu_jobs=args.cpu_jobs,
     )
     if settings.allow_local_datasets and not settings.local_enabled:
         logging.getLogger("splatworker").info(
@@ -370,6 +371,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--trainer", default=os.environ.get("SPLATWORKER_TRAINER", "auto"),
                    choices=["auto", "gsplat", "vulkan"],
                    help="auto: gsplat on NVIDIA, the Vulkan trainer (experimental) on other GPUs")
+    s.add_argument("--cpu-jobs", type=int, default=int(os.environ.get("SPLATWORKER_CPU_JOBS", "1")),
+                   help="processing jobs at once; they hold a GPU only during GPU stages (default 1: COLMAP "
+                        "already uses every core)")
     s.add_argument("--allow-local-datasets", action="store_true",
                    help="enable the endpoints for SplatWork for Linux's desktop app on this PC (local folders as "
                         "datasets, queue order); it must also pass its per-launch secret in $" + LOCAL_SECRET_ENV)

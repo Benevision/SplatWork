@@ -343,6 +343,8 @@ class ServerSettings:
     local_secret: Optional[str] = None
     # which trainer trains: "auto" (gsplat on NVIDIA, else the Vulkan trainer), "gsplat", "vulkan" (vktrain.py)
     trainer: str = "auto"
+    # processing jobs at once (gpulease.py: they hold a GPU only around GPU stages; COLMAP uses every core)
+    cpu_jobs: int = 1
 
     @property
     def local_enabled(self) -> bool:

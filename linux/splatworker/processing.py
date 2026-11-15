@@ -191,8 +191,9 @@ def link_tree(src_dir: Path, dst_dir: Path, allowed_roots: List[Path]) -> int:
 
 
 def run_processing(upload_root: Path, request: Dict[str, Any], job_dir: Path,
-                   progress_cb, log, should_stop) -> Dict[str, Any]:
-    """Run ``splatprep.runner.run_request`` and keep its output directory as ``job_dir/output``."""
+                   progress_cb, log, should_stop, gate=None) -> Dict[str, Any]:
+    """Run ``splatprep.runner.run_request`` and keep its output directory as ``job_dir/output``. ``gate``: a
+    gpulease.Gate — the GPU is held only around GPU stages (None: whatever the job was started with)."""
     req = validate_request(request)
     if not splatprep_available():
         raise ProcessingError("splatprep is not installed on this worker "
@@ -218,6 +219,8 @@ def run_processing(upload_root: Path, request: Dict[str, Any], job_dir: Path,
         if evt.get("done"):
             return
         stage = str(evt.get("stage", "processing"))
+        if gate is not None:
+            gate.stage(req["task"], stage, evt)
         frac = evt.get("progress")
         detail = str(evt.get("message") or "").strip()
         # "stage: detail" (e.g. "masks: SAM 2 forward: frame 120/649") so the Mac can show what is
@@ -231,7 +234,11 @@ def run_processing(upload_root: Path, request: Dict[str, Any], job_dir: Path,
             log(f"[{stage}] {evt['message']}")
 
     log(f"splatprep request: {req}")
-    result = run_request(req, workdir, progress)
+    try:
+        result = run_request(req, workdir, progress)
+    finally:
+        if gate is not None:
+            gate.release()
     if isinstance(result, dict) and result.get("error"):
         raise ProcessingError(str(result["error"]))
     if reported_error:
@@ -250,15 +257,22 @@ def run_processing(upload_root: Path, request: Dict[str, Any], job_dir: Path,
 
 
 def subprocess_entry(upload_root: str, request: dict, job_dir: str, device_index,
-                     queue, cancel_event) -> None:
+                     queue, cancel_event, gpu_granted=None) -> None:
+    """``device_index``: the job's home GPU (CUDA index); ``gpu_granted``: the lease event (gpulease.py), None =
+    the GPU for the whole run."""
     if device_index is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(device_index)
     try:
+        gate = None
+        if gpu_granted is not None:
+            from .gpulease import Gate
+
+            gate = Gate(queue, gpu_granted, cancel_event.is_set, lambda **f: queue.put(("status", f)))
         stats = run_processing(
             Path(upload_root), request, Path(job_dir),
             progress_cb=lambda **f: queue.put(("status", f)),
             log=lambda m: queue.put(("log", m)),
-            should_stop=cancel_event.is_set,
+            should_stop=cancel_event.is_set, gate=gate,
         )
         queue.put(("done", stats))
     except KeyboardInterrupt:

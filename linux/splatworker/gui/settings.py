@@ -41,6 +41,8 @@ class AppSettings:
     log_level: str = "info"
     # Which trainer trains: "auto" (gsplat on NVIDIA, the Vulkan trainer on AMD / Intel), "gsplat", "vulkan"
     trainer: str = "auto"
+    # processing jobs at once (they hold a GPU only during GPU stages; COLMAP already uses every core)
+    cpu_jobs: int = 1
     # Extra components the setup assistant installed (informational, kept here so the
     # "repair" button can reinstall the same set).
     with_splatprep: bool = True
@@ -118,6 +120,7 @@ class AppSettings:
         check("max_extracted_gb", is_num(self.max_extracted_gb) and 0.1 <= self.max_extracted_gb <= 20000,
               "Maximum unpacked size must be between 0.1 and 20000 GB.")
         check("trainer", self.trainer in ("auto", "gsplat", "vulkan"), "Unknown trainer.")
+        check("cpu_jobs", is_int(self.cpu_jobs) and 1 <= self.cpu_jobs <= 8, "Processing jobs at once: 1 to 8.")
         check("log_level", self.log_level in ("critical", "error", "warning", "info", "debug"),
               "Unknown log level.")
         for name in ("require_token", "mdns", "start_server_on_launch", "run_in_background",
@@ -150,6 +153,8 @@ class AppSettings:
             args += ["--advertise-ip", self.advertise_ip]
         if self.trainer != "auto":
             args += ["--trainer", self.trainer]
+        if self.cpu_jobs != 1:
+            args += ["--cpu-jobs", str(int(self.cpu_jobs))]
         return args
 
 

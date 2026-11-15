@@ -81,6 +81,15 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.6" date="2026-11-16">
+      <description>
+        <p>Processing runs alongside training.</p>
+        <ul>
+          <li>Camera solves, masks and frame extraction use the GPU only for their GPU steps, so mapping and other CPU work runs while another job trains. The Jobs page shows whether a job runs on the CPU or waits for the GPU.</li>
+          <li>Running processing jobs show their progress and can be cancelled on the Jobs page.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.5" date="2026-11-16">
       <description>
         <p>Measure GPU speed puts each graphics card under real load.</p>

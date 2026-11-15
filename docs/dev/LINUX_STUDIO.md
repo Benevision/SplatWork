@@ -32,7 +32,8 @@ Status: ✅ done · 🟡 partial (what is missing is said) · ⏳ not yet · ➖
   this app only: it passes a per-launch secret to the server it starts and sends it as `X-SplatWork-Local`;
   a loopback connection without it (SSH tunnel, `tailscale serve`, proxy) counts as remote. Remote clients
   can't see or use the app's folder datasets, and `export-local` only writes into registered folders.
-* **GPU sharing.** One job per GPU at a time, as before. Queued jobs are ordered by priority, then age: local
+* **GPU sharing.** One training job per GPU at a time; processing jobs hold a GPU only during their GPU steps
+  (1.7.6, `splatworker/gpulease.py`, PROTOCOL.md "GPU only for GPU steps"). Queued jobs are ordered by priority, then age: local
   Studio jobs are submitted with `priority: 1` (the person at the PC goes first) unless *Local jobs go first* is
   switched off (New Project dialog, stored in `studio.json`); nothing running is ever pre-empted. Every queued job
   can be moved to the front (`POST /v1/jobs/{id}/prioritize`) or cancelled on the Queue & Worker page, which shows each job's

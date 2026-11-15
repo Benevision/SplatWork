@@ -273,6 +273,9 @@ class Preferences:
         combo.set_selected(keys.index(self.s.trainer) if self.s.trainer in keys else 0)
         combo.connect("notify::selected", lambda r, _p: self._set("trainer", keys[r.get_selected()]))
         g.add(combo)
+        self._spin(g, "cpu_jobs", "Processing jobs at once",
+                   "Camera solves, masks and frame extraction use the GPU only for their GPU steps, so they run "
+                   "alongside training. Mapping already uses every CPU core: 1 is usually best.", 1, 8, 1)
         return g
 
     def _startup(self) -> Adw.PreferencesGroup:

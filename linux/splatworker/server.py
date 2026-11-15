@@ -31,7 +31,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -57,7 +57,7 @@ FINAL_STATES = ("completed", "failed", "cancelled")
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
                "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin", "checkpointStep",
-               "pausedAt", "stage", "stageProgress", "stages", "trainJobId", "parentJobId")
+               "pausedAt", "stage", "stageProgress", "stages", "trainJobId", "parentJobId", "resource")
 REMOTE_PAUSE_LIMIT = 3600.0         # another computer's paused job resumes by itself after this (s)
 LOCAL_PAUSE_LIMIT = 14 * 86400.0    # a paused job of this PC's app is cancelled (resume.pt freed) after this
 RESUME_FILES = ("resume.pt", "resume.vkstate")   # paused train job's saved state: CUDA trainer, Vulkan trainer
@@ -159,7 +159,8 @@ class Job:
             for k, v in fields.items():
                 if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
                          "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority",
-                         "checkpointStep", "pausedAt", "stage", "stageProgress", "stages", "trainJobId"):
+                         "checkpointStep", "pausedAt", "stage", "stageProgress", "stages", "trainJobId",
+                         "resource"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None
                     self.status[k] = v
@@ -205,6 +206,12 @@ class JobManager:
         self.queue: Deque[str] = collections.deque()
         self.cond = threading.Condition()
         self.running: Dict[Any, str] = {}      # slot key → job id
+        # GPU leases (gpulease.py), when the backend supports them: processing jobs run in a CPU pool and hold
+        # their home GPU only around GPU stages
+        self.lease_mode = bool(getattr(backend, "leases", False))
+        self.cpu_running: Dict[str, Any] = {}  # processing job id → its home slot
+        self.leases: Dict[Any, str] = {}       # slot key → processing job id holding that GPU
+        self.pending: List[Any] = []           # gpulease.Pending, oldest first
         self.stopping = False
         self.threads: List[threading.Thread] = []
 
@@ -262,6 +269,16 @@ class JobManager:
                                  name=f"splatworker-gpu-{slot.id}")
             t.start()
             self.threads.append(t)
+        if self.lease_mode:
+            pools = [("cpu", False)] * max(1, int(self.settings.cpu_jobs)) + [("quick", True)]
+            for i, (name, quick) in enumerate(pools):
+                t = threading.Thread(target=self._cpu_loop, args=(quick,), daemon=True,
+                                     name=f"splatworker-{name}{i}")
+                t.start()
+                self.threads.append(t)
+            t = threading.Thread(target=self._lease_watch, daemon=True, name="splatworker-leases")
+            t.start()
+            self.threads.append(t)
         from .pipeline import start_runner
 
         for job in list(self.jobs.values()):
@@ -278,7 +295,8 @@ class JobManager:
         with self.cond:
             self.stopping = True
             self.cond.notify_all()
-            running = [self.jobs[j] for j in self.running.values() if j in self.jobs]
+            running = [self.jobs[j] for j in list(self.running.values()) + list(self.cpu_running)
+                       if j in self.jobs]
         for job in running:
             # A training job that can pause saves its state and resumes after the restart; others are cancelled.
             if self.pausable(job) and not job.cancel_event.is_set():
@@ -407,7 +425,7 @@ class JobManager:
         return [j.snapshot() for j in jobs]
 
     def busy(self) -> bool:
-        return bool(self.running)
+        return bool(self.running or self.cpu_running)
 
     def queue_length(self) -> int:
         with self.cond:
@@ -569,6 +587,8 @@ class JobManager:
         from .slots import standalone
 
         kind = job.spec.get("kind")
+        if self.lease_mode and kind == "process":
+            return False                 # the CPU pool runs it (gpulease.py)
         named = job.spec.get("slot")
         if named:
             return named == slot.id
@@ -613,7 +633,7 @@ class JobManager:
                 # takes next.
                 live = [j for j in self.queue if j in self.jobs and self.jobs[j].state == "queued"]
                 self.queue = collections.deque(live)
-                mine = [j for j in live if self.slot_takes(slot, self.jobs[j])]
+                mine = [] if slot.key in self.leases else [j for j in live if self.slot_takes(slot, self.jobs[j])]
                 if mine:
                     best = max(mine, key=lambda j: (int(self.jobs[j].status.get("priority") or 0), -live.index(j)))
                     self.queue.remove(best)
@@ -624,6 +644,131 @@ class JobManager:
                     job.update(persist=True, state="loading", message="starting")
                     return job
                 self.cond.wait(timeout=1.0)
+
+    # ------------------------------------------------------- CPU pool + GPU leases (gpulease.py)
+    @staticmethod
+    def _quick(job: Job) -> bool:
+        """Short interactive processing (the mask editor's preview): its own lane, never behind a camera solve."""
+        return (job.spec.get("request") or {}).get("task") == "maskpreview"
+
+    def _next_cpu_job(self, quick: bool) -> Optional[Job]:
+        with self.cond:
+            while True:
+                if self.stopping:
+                    return None
+                live = [j for j in self.queue if j in self.jobs and self.jobs[j].state == "queued"]
+                mine = [j for j in live if self.jobs[j].spec.get("kind") == "process"
+                        and self._quick(self.jobs[j]) == quick]
+                if mine:
+                    best = max(mine, key=lambda j: (int(self.jobs[j].status.get("priority") or 0), -live.index(j)))
+                    self.queue.remove(best)
+                    job = self.jobs[best]
+                    self.cpu_running[best] = self._home_slot().key
+                    job.update(persist=True, state="loading", message="starting", resource="cpu")
+                    return job
+                self.cond.wait(timeout=1.0)
+
+    def _home_slot(self):
+        """(Holding ``cond``.) The GPU a processing job's GPU stages use: the processing-capable slot with the
+        fewest processing jobs on it; no such slot (no CUDA GPU): the default device, never waited for."""
+        from .slots import Slot
+
+        able = [s for s in self.slots if s.cuda is not None or s.key is None]
+        if not able:
+            return Slot(key=None)
+        load = collections.Counter(self.cpu_running.values())
+        return min(able, key=lambda s: (load[s.key], self.slots.index(s)))
+
+    def _cpu_loop(self, quick: bool) -> None:
+        while True:
+            job = self._next_cpu_job(quick)
+            if job is None:
+                return
+            with self.cond:
+                key = self.cpu_running.get(job.id)
+            slot = next((s for s in self.slots if s.key == key), None) or self._slot(key)
+            try:
+                self._run_job(job, slot)
+            except Exception:  # pragma: no cover - defensive
+                log.exception("unexpected error running job %s", job.id)
+            finally:
+                self.gpu_release(job.id)
+                with self.cond:
+                    self.cpu_running.pop(job.id, None)
+                    self.cond.notify_all()
+                if job.deleted:
+                    shutil.rmtree(job.dir, ignore_errors=True)
+
+    def gpu_request(self, job: Job, slot, stage: str, need_mb: int, grant: Callable[[], None]) -> None:
+        from .gpulease import Pending
+
+        with self.cond:
+            self.pending = [p for p in self.pending if p.job_id != job.id]
+            self.pending.append(Pending(job.id, slot, stage, need_mb, grant))
+            job.log(f"{stage}: asks for {'GPU ' + str(slot.cuda) if slot.cuda is not None else 'the GPU'}")
+            self._grant_leases_locked()
+
+    def gpu_release(self, job_id: str) -> None:
+        with self.cond:
+            self.pending = [p for p in self.pending if p.job_id != job_id]
+            for k in [k for k, j in self.leases.items() if j == job_id]:
+                del self.leases[k]
+                if job_id in self.jobs:
+                    self.jobs[job_id].log("GPU handed back")
+            self._grant_leases_locked()
+            self.cond.notify_all()
+
+    def _free_mb(self, slot) -> Optional[int]:
+        from .gpu import list_gpus
+
+        try:
+            gpus = list_gpus([slot.cuda])
+        except Exception:  # noqa: BLE001
+            return None
+        return int(gpus[0]["freeMemoryMB"]) if gpus else None
+
+    def _grant_leases_locked(self) -> None:
+        """(Holding ``cond``.) Give waiting processing jobs their GPU, oldest first: at once where there is no GPU
+        to share; on a free GPU unless a queued train / census job could start there (training first); beside a
+        running training job when its free memory covers the stage."""
+        from .gpulease import MARGIN_MB
+
+        queued = [self.jobs[j] for j in self.queue if j in self.jobs and self.jobs[j].state == "queued"]
+        for p in list(self.pending):
+            slot = p.slot
+            job = self.jobs.get(p.job_id)
+            if job is None or job.cancel_event.is_set():
+                self.pending.remove(p)
+                continue
+            if slot.cuda is not None:
+                if slot.key in self.leases:
+                    continue
+                holder = self.running.get(slot.key)
+                if holder is None:
+                    if any(self.slot_takes(slot, q) for q in queued):
+                        continue
+                    why = "the GPU is free"
+                else:
+                    free = self._free_mb(slot)
+                    if free is None or free < p.need + MARGIN_MB:
+                        continue
+                    why = f"beside {holder} ({free / 1024:.1f} GB free, the stage needs ~{p.need / 1024:.1f} GB)"
+                self.leases[slot.key] = p.job_id
+            else:
+                why = "no GPU to share"
+            self.pending.remove(p)
+            job.log(f"{p.stage}: GPU granted after {time.monotonic() - p.since:.0f} s ({why})")
+            p.grant()
+
+    def _lease_watch(self) -> None:
+        """Waiting leases are re-checked every 2 s: free GPU memory changes while training runs."""
+        while True:
+            with self.cond:
+                if self.stopping:
+                    return
+                if self.pending:
+                    self._grant_leases_locked()
+                self.cond.wait(timeout=2.0)
 
     def _housekeep_locked(self) -> None:
         """(Holding ``cond``, at most every 30 s.) Paused jobs mustn't wait forever: another computer's (its app
@@ -668,6 +813,8 @@ class JobManager:
             finally:
                 with self.cond:
                     self.running.pop(slot.key, None)
+                    if self.pending:
+                        self._grant_leases_locked()     # a waiting GPU stage may now have the GPU
                     self.cond.notify_all()     # a slow slot may now take a job a fast one left
                 if job.deleted:
                     shutil.rmtree(job.dir, ignore_errors=True)
@@ -687,6 +834,8 @@ class JobManager:
         job.update(persist=True, state="loading", message="resuming" if resuming else "starting", gpu=gpu_name)
         where = ("GPU " + str(device) if device is not None else
                  "Vulkan device " + str(slot.vulkan) if slot.vulkan is not None else "default device")
+        if self.lease_mode and job.spec.get("kind") == "process":
+            where = f"the CPU (GPU stages on {where})"
         job.log(f"starting on {where}{' (' + gpu_name + ')' if gpu_name else ''}"
                 f"{' — a slower GPU, used while the faster ones are busy' if slot.slow else ''}")
 
@@ -727,6 +876,9 @@ class JobManager:
             cancel_event=job.cancel_event, pause_event=job.pause_event, checkpoint_event=job.checkpoint_event,
             checkpoint=checkpoint,
         )
+        if self.lease_mode and kind == "process":
+            ctx.gpu_request = lambda stage, need, grant: self.gpu_request(job, slot, stage, need, grant)
+            ctx.gpu_release = lambda: self.gpu_release(job.id)
         try:
             stats = self.backend.run(ctx) or {}
         except JobPaused as e:
@@ -1117,7 +1269,12 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             # ≥ 1.7.3: the job slots, one job each at a time — {id, name, kinds, cuda, vulkan, integrated, slow,
             # memoryMB, busy}. A slow slot isn't in "gpus": it takes a train job that names it ("slot" in
             # POST /v1/jobs), or a standalone one (no region / cameraIds) while every fast slot is busy.
-            "slots": [s.info(busy=s.key in manager.running) for s in manager.slots],
+            "slots": [s.info(busy=s.key in manager.running or s.key in manager.leases) for s in manager.slots],
+            # ≥ 1.7.6: processing jobs run in a CPU pool and take their GPU only for GPU steps (gpulease.py);
+            # JobStatus "resource": "cpu" | "gpu" | "waiting-gpu"
+            "cpuJobs": {"limit": max(1, int(settings.cpu_jobs)), "running": len(manager.cpu_running),
+                        "leases": {str(k): j for k, j in manager.leases.items()},
+                        "waitingForGpu": [p.job_id for p in manager.pending]} if manager.lease_mode else None,
             # ≥ 1.7.5: every Vulkan GPU (also unticked / slow ones) with its measured speed (null: not measured):
             # {index, name, pci, integrated, slot, stepsPerSecond, size, splats, photos, peakMemoryMB, measuredAt}
             "vulkanDevices": vulkan_devices(),

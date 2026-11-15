@@ -10,6 +10,7 @@ STATE_LABELS = {
     "queued": "Waiting",
     "loading": "Preparing",
     "training": "Training",
+    "running": "Running",
     "completed": "Finished",
     "failed": "Failed",
     "cancelled": "Cancelled",
@@ -72,6 +73,10 @@ class JobView:
     is_error: bool
 
 
+ACTIVE = ("loading", "training", "running")     # processing jobs report "running"
+RESOURCE_LABELS = {"cpu": "running on the CPU", "gpu": "on the GPU", "waiting-gpu": "waiting for the GPU"}
+
+
 def job_view(s: Dict[str, Any]) -> JobView:
     state = s.get("state") or "queued"
     kind = s.get("kind") or "train"
@@ -89,11 +94,14 @@ def job_view(s: Dict[str, Any]) -> JobView:
         if s.get("numGaussians"):
             parts.append(f"{count(s['numGaussians'])} splats")
     else:
-        if state in ("loading", "training") and total:
+        if state in ACTIVE and total:
             parts.append(f"{fraction * 100:.0f} %")
-        if msg and state in ("loading", "training"):
+        if msg and state in ACTIVE:
             parts.append(msg)
-    if state in ("loading", "training"):
+        res = s.get("resource")       # processing jobs hold the GPU only for GPU steps (worker ≥ 1.7.6)
+        if res in RESOURCE_LABELS and state in ACTIVE:
+            parts.append(RESOURCE_LABELS[res])
+    if state in ACTIVE:
         if s.get("etaSeconds"):
             parts.append(f"about {duration(s['etaSeconds'])} left")
         if kind == "train" and msg and msg not in ("training", "starting"):
@@ -102,7 +110,7 @@ def job_view(s: Dict[str, Any]) -> JobView:
         parts.append(f"took {duration(s['elapsedSeconds'])}")
     elif state == "failed" and msg:
         parts.append(msg)
-    if s.get("gpu") and state in ("loading", "training"):
+    if s.get("gpu") and state in ACTIVE and s.get("resource") not in ("cpu", "waiting-gpu"):
         parts.append(s["gpu"])
     export = None
     if state == "completed":
@@ -111,7 +119,7 @@ def job_view(s: Dict[str, Any]) -> JobView:
     return JobView(job_id=s.get("jobId", ""), title=title, kind=kind, state=state,
                    state_label=STATE_LABELS.get(state, state), fraction=fraction,
                    detail=" · ".join(dict.fromkeys(p for p in parts if p)),
-                   can_cancel=state in ("queued", "loading", "training") and msg != "cancelling",
+                   can_cancel=state in ("queued",) + ACTIVE and msg != "cancelling",
                    can_delete=True, export=export, is_error=state == "failed")
 
 

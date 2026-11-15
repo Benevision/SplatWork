@@ -74,7 +74,7 @@ class JobRow(Adw.ActionRow):
         self.icon.set_from_icon_name(STATE_ICONS.get(v.state, "content-loading-symbolic"))
         self.progress.set_fraction(v.fraction)
         self.progress.set_text(f"{v.fraction * 100:.0f} %" if v.state != "queued" else "waiting")
-        self.progress.set_visible(v.state in ("queued", "loading", "training", "paused"))
+        self.progress.set_visible(v.state in ("queued", "loading", "training", "running", "paused"))
         if v.state == "paused":
             self.progress.set_text("paused")
         msg = status.get("message") or ""

@@ -204,6 +204,14 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 (in the `/v1/jobs`, `/v1/process` and `/v1/census` bodies, 0–1000): it uses 1 so the person at that PC goes ahead of
 jobs queued by other machines; everybody else's requests queue at 0.
 
+**GPU only for GPU steps (worker ≥ 1.7.6).** Training and Auto clean keep one GPU for their whole run. Processing
+jobs (`/v1/process`) run in a CPU pool instead (`serve --cpu-jobs`, default 1; the mask editor's previews have a lane
+of their own) and hold their GPU only around GPU stages — learned features / matching / retrieval, masks, 360°
+resampling — so a camera solve maps and adjusts on the CPU while another job trains. A GPU stage waits while the GPU
+is busy, unless training runs there and the GPU's free memory covers the stage; a queued training job goes first.
+`JobStatus` gains `"resource"`: `"cpu"`, `"gpu"` or `"waiting-gpu"` (the message then reads "<stage>: waiting for
+the GPU"); `/v1/info` gains `"cpuJobs": {limit, running, leases: {slot: jobId}, waitingForGpu: [jobId]}`.
+
 **Pause / resume and checkpoints (worker ≥ 1.4.0, capability `pause`).**
 
 | Method & path | Body | Response |
