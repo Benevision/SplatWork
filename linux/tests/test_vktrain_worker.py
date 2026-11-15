@@ -20,6 +20,9 @@ if str(ROOT) not in sys.path:
 
 from splatworker import vktrain  # noqa: E402
 
+# the fake programs are scripts with a #! line; the Vulkan trainer isn't built for Windows yet anyway
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="fake trainer programs are POSIX scripts")
+
 GPU_INFO = {"ok": True, "device": "AMD Radeon RX 6700 XT (RADV NAVI22)", "driver": "radv Mesa 25.1",
             "vendorID": 0x1002, "deviceID": 0x73DF, "deviceType": "discrete", "memoryMB": 12272,
             "interface": vktrain.INTERFACE, "subgroupSize": 64, "nativeAtomics": True}
@@ -90,6 +93,7 @@ def test_gpu_entry_for_info(monkeypatch):
     assert e == {"name": GPU_INFO["device"], "memoryMB": 12288, "freeMemoryMB": 11000, "vendor": "amd"}
 
 
+@posix_only
 def test_device_info_runs_the_program(tmp_path, monkeypatch):
     prog = tmp_path / "splatwork-vk-train"
     prog.write_text("#!/bin/sh\necho 'device: x' >&2\necho '" + json.dumps({k: v for k, v in GPU_INFO.items() if k != "ok"}) + "'\n")
@@ -174,6 +178,7 @@ def run_job(job: Path, config: dict, act=None, timeout=30.0):
             return msgs, (kind, payload)
 
 
+@posix_only
 def test_runner_trains_and_forwards_messages(fake, tmp_path):
     job = tmp_path / "job"
     job.mkdir()
@@ -186,6 +191,7 @@ def test_runner_trains_and_forwards_messages(fake, tmp_path):
     assert (job / "result.ply").is_file()
 
 
+@posix_only
 def test_runner_checkpoint_pause_resume(fake, tmp_path):
     job = tmp_path / "job"
     job.mkdir()
@@ -205,6 +211,7 @@ def test_runner_checkpoint_pause_resume(fake, tmp_path):
     assert not (job / "resume.vkstate").exists()
 
 
+@posix_only
 def test_runner_cancel_error_and_crash(fake, tmp_path):
     for name, cfg, act, expect in [
         ("c", {"iterations": 5000}, lambda k, p, ev: ev["cancel"].set() if k == "status" else None, "cancelled"),

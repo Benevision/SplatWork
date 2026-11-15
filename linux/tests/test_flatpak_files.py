@@ -70,7 +70,7 @@ def test_every_referenced_file_exists(manifest):
                 assert any((r / src).exists() for r in dir_roots), f"{module['name']}: {src} missing"
             if words[:2] == ["cp", "-r"]:
                 assert any((r / words[2]).exists() for r in dir_roots), f"{module['name']}: {words[2]} missing"
-    assert names == ["python3-deps", "splatprep", "splatworker"]
+    assert names == ["python3-deps", "splatprep", "splatwork-vk-train", "splatworker"]
 
 
 def test_python_deps_match_runtime_python():
