@@ -35,6 +35,8 @@ struct TrainerStatus: Sendable, Equatable {
     var normalLoss: Float = 0, normalCoverage: Float = 0
     var shDegree = 0
     var phase = "Starting"
+    /// Set when the per-photo colour correction had to be reset or turned off (see guardColourCorrection).
+    var colourNote: String? = nil
 }
 
 enum TrainerError: LocalizedError {
@@ -448,6 +450,74 @@ final class MetalTrainer: @unchecked Sendable {
             mean[i] = mean[i] * inv - ident
         }
         for v in train { for i in 0..<G { p[v * G + i] -= mean[i] } }
+    }
+
+    // MARK: colour-correction safeguard
+
+    /// The per-photo correction is meant for small exposure / white-balance / shadow differences. When the scene
+    /// can't fit the photos (a wrong camera solve), it can end up supplying the colour itself: the splats lose their
+    /// own colour and each photo is painted by its correction (the Drone sample: held-out PSNR fell from 14.9 to
+    /// 9.3 dB while training PSNR held, 79 % of splats dead, base colours black, a green cast in the viewer).
+    /// At each evaluation a few training photos are rendered *without* the correction. When that score falls more
+    /// than 3 dB below its best twice running, or the render is far darker than the photos, every grid is reset to
+    /// "no change"; the second time, the correction is turned off for the rest of the run. (Comparing training PSNR
+    /// with the corrected loss was tried first and fired on healthy runs: the two aren't measured alike.)
+    private var ccResets = 0, ccStrikes = 0, ccBest: Float = -.infinity
+    private(set) var colourNote: String?
+
+    static let ccDarkRatio: Double = 0.6, ccDropDB: Float = 3, ccWarmup = 4000
+
+    /// Uncorrected render of a few training views against the photos: brightness ratio (masked-in pixels) and PSNR.
+    func uncorrectedCheck() throws -> (brightness: Double, psnr: Float)? {
+        guard !trainViews.isEmpty else { return nil }
+        let every = max(1, trainViews.count / 8)
+        var lumR: Double = 0, lumT: Double = 0, psum: Float = 0, c = 0
+        for v in Swift.stride(from: 0, to: trainViews.count, by: every).prefix(8).map({ trainViews[$0] }) {
+            guard let r = try render(view: v) else { continue }
+            psum += r.mse > 0 ? -10 * log10(r.mse) : 99; c += 1
+            let px = v.width * v.height, ch = max(3, r.pixels.count / max(px, 1))
+            let t = v.target.contents().bindMemory(to: UInt8.self, capacity: px * 4)
+            for i in Swift.stride(from: 0, to: px, by: 7) where t[i * 4 + 3] > 127 {
+                lumR += Double(r.pixels[i * ch]) + Double(r.pixels[i * ch + 1]) + Double(r.pixels[i * ch + 2])
+                lumT += Double(t[i * 4]) + Double(t[i * 4 + 1]) + Double(t[i * 4 + 2])
+            }
+        }
+        guard c > 0, lumT > 0 else { return nil }
+        return (lumR / lumT, psum / Float(c))
+    }
+    func uncorrectedBrightness() throws -> Double? { try uncorrectedCheck()?.brightness }
+
+    private func guardColourCorrection() throws {
+        guard config.bilateralGrid, bgGrid != nil, step >= Self.ccWarmup, let chk = try uncorrectedCheck() else { return }
+        if ProcessInfo.processInfo.environment["SPLAT_CC_LOG"] != nil {
+            fputs(String(format: "colour check step %d: uncorrected brightness %.2f, PSNR %.2f dB (best %.2f)\n", step, chk.brightness, chk.psnr, ccBest), stderr)
+        }
+        let dark = chk.brightness < Self.ccDarkRatio
+        let drop = ccBest - chk.psnr
+        let dropped = drop > Self.ccDropDB
+        ccBest = max(ccBest, chk.psnr)
+        ccStrikes = dropped ? ccStrikes + 1 : 0
+        guard dark || ccStrikes >= 2 else { return }
+        ccStrikes = 0; ccResets += 1; ccBest = -.infinity
+        let why = dark ? String(format: "without it the splats render %.0f %% as bright as the photos", 100 * chk.brightness)
+                       : String(format: "without it the photos score %.1f dB below their best", drop)
+        if ccResets >= 2 {
+            config.bilateralGrid = false
+            colourNote = "Per-photo colour correction turned off at step \(step): it was taking over the scene's colour (\(why)). This usually means the cameras don't fit the photos — check the camera solve."
+        } else {
+            resetBilagrid()
+            colourNote = "Per-photo colour correction reset at step \(step): it was taking over the scene's colour (\(why))."
+        }
+        fputs((colourNote ?? "") + "\n", stderr)
+    }
+
+    private func resetBilagrid() {
+        guard let bgGrid else { return }
+        let nv = views.count, G = Self.bgSize, cell = 8 * 16 * 16
+        let p = bgGrid.contents().bindMemory(to: Float.self, capacity: nv * G)
+        memset(bgGrid.contents(), 0, nv * G * 4)
+        for v in 0..<nv { for k in [0, 5, 10] { for c in 0..<cell { p[v * G + k * cell + c] = 1 } } }
+        bgM1 = [Float](repeating: 0, count: nv * G); bgM2 = bgM1; bgSteps = [Int](repeating: 0, count: nv)
     }
 
     /// Identity correction per view, scaled by recorded exposure when available:
@@ -1661,6 +1731,8 @@ final class MetalTrainer: @unchecked Sendable {
             emaPSNR = step <= 1 ? p : emaPSNR * 0.95 + p * 0.05
             if config.evalInterval > 0 && step % config.evalInterval == 0 {
                 status.evalPSNR = try evaluate()
+                try guardColourCorrection()
+                status.colourNote = colourNote
             }
             if let onPreview, previewEvery > 0, step % previewEvery == 0 { onPreview(makeScene()) }
             let now = CACurrentMediaTime()

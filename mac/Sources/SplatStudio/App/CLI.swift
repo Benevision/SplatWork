@@ -490,6 +490,9 @@ enum CLI {
                     print("auto clean removed \(plan.remove.filter { $0 }.count) splats (\(plan.unseenCount) unseen, \(plan.outsideCount) outside box)")
                 }
                 let r = try t.evaluate(cloud: g, saveRendersTo: value("--save-renders").map { URL(fileURLWithPath: $0) })
+                if ProcessInfo.processInfo.environment["SPLAT_CC_LOG"] != nil, let b = try t.uncorrectedBrightness() {
+                    print(String(format: "uncorrected brightness vs photos: %.2f (the colour safeguard acts below %.2f)", b, MetalTrainer.ccDarkRatio))
+                }
                 print(String(format: "eval %@: %d splats, SH %d, antialiased %@ → held-out PSNR %.2f dB over %d views (min %.2f, max %.2f)",
                              (f as NSString).lastPathComponent, g.count, cfg.shDegree, cfg.antialiased ? "yes" : "no", r.mean, r.perView.count,
                              r.perView.min() ?? 0, r.perView.max() ?? 0))

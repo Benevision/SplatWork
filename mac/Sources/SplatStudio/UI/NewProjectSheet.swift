@@ -41,6 +41,8 @@ struct NewProjectSheet: View {
     @State private var homeAnalysisError: String? = nil
     private var effectiveMode: ExperienceMode { showAll ? .advanced : mode }
     private var prep: PrepSession { model.prep }
+    @State private var prepPreview = PrepPreview()
+
     private var python = PythonEnvironment.shared
 
     enum SolverKind: String, CaseIterable, Identifiable { case automatic, objectCapture, learned, fromCapture; var id: String { rawValue } }
@@ -71,7 +73,7 @@ struct NewProjectSheet: View {
             Divider()
             footer
         }
-        .frame(width: 680, height: 620)
+        .frame(width: prep.running ? 940 : 680, height: prep.running ? 760 : 620)
         .onAppear {
             // Reopened while preparing (or after a run that failed while hidden): show that run, don't reset it.
             if prep.running || prep.error != nil { return }
@@ -555,45 +557,23 @@ struct NewProjectSheet: View {
                 Text(e).textSelection(.enabled)
                 Text("Common fixes: use more overlapping images, try a different camera solver, or enable masking for moving objects.").foregroundStyle(.secondary)
             } else {
-                // Redraw once a second so elapsed time / ETA / heartbeat stay live even during long silent steps.
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Preparing \(projectName.isEmpty ? prep.projectDir?.lastPathComponent ?? "" : projectName)").font(.title2.bold())
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Overall").font(.headline)
-                                Spacer()
-                                Text("\(Int(prep.overall * 100)) %").font(.headline.monospacedDigit())
-                            }
-                            ProgressView(value: prep.overall)
-                            HStack(spacing: 14) {
-                                Label("Elapsed \(formatDuration(prep.elapsed))", systemImage: "clock")
-                                if let eta = prep.eta { Label("About \(formatDuration(eta)) left", systemImage: "hourglass") }
-                                else { Label("Estimating time left…", systemImage: "hourglass") }
-                                Spacer()
-                                heartbeat
-                            }
-                            .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                        stageList
-                        if prep.thenTrain {
-                            Label("Training starts automatically when the dataset is ready — follow it in the Train panel and the banner at the bottom of the viewer.", systemImage: "arrow.turn.down.right")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                    }
-                }
+                PrepProgressView(prep: prep, title: "Preparing \(projectName.isEmpty ? prep.projectDir?.lastPathComponent ?? "" : projectName)",
+                                 summary: prep.summary, workerName: prep.workerName,
+                                 preview: prepPreview)
             }
-            GroupBox("Log") {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 1) {
-                            ForEach(Array(prep.log.enumerated()), id: \.offset) { i, l in Text(l).id(i) }
+            if prep.error != nil {
+                GroupBox("Log") {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 1) {
+                                ForEach(Array(prep.log.enumerated()), id: \.offset) { i, l in Text(l).id(i) }
+                            }
+                            .font(.caption.monospaced()).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                         }
-                        .font(.caption.monospaced()).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                        .onAppear { if !prep.log.isEmpty { proxy.scrollTo(prep.log.count - 1, anchor: .bottom) } }
                     }
-                    .onChange(of: prep.log.count) { _, n in if n > 0 { proxy.scrollTo(n - 1, anchor: .bottom) } }
+                    .frame(maxHeight: .infinity)
                 }
-                .frame(maxHeight: .infinity)
             }
         }
         .padding(20)

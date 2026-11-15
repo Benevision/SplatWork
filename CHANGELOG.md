@@ -6,6 +6,14 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **A new preparation screen on the Mac:** a progress ring with elapsed time and time left. A timeline shows every
+  step with its time: photos, upload, masks, sky, camera solve, finalise, download. A card for the current step
+  says where it runs (this Mac or a Linux worker) and gives live counters with a rate ("9,866 of 14,128 pairs"),
+  the camera-solve sub-steps and the recent activity. Live previews show the latest photos, the masks and the sky
+  tinted onto the photos, and a top-down map of the solved cameras over the sparse points. Uploads to a worker
+  show size, speed and time left. The full log is one click away.
+- **The same colour-correction safeguard on the Mac's trainer.** On healthy runs it stays quiet (checked on an
+  iPhone capture and a drone survey).
 - **SplatWork for Linux 1.7.1 — colour-correction safeguard:** per-photo local colour correction (bilateral grid)
   can no longer take over a scene's colour, as it did on a drone survey trained on a wrong camera solve (the result
   came out nearly black, its colours held by the correction, while held-out PSNR fell from 14.9 to 9.3 dB). From
