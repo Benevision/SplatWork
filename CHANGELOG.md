@@ -6,6 +6,17 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Smaller, resumable uploads to workers.** Photos sent to a Linux worker are re-saved for the upload only; the
+  project keeps the originals. *Settings → Uploads to workers → Upload size* offers three options:
+  - **Standard** (default): about ¾ the bytes, 38 dB from the original;
+  - **Compact:** about half, 36 dB;
+  - **Original.**
+
+  Both re-saved sizes differ from the originals far less than a splat can show. Location and a drone's height
+  above take-off are kept. Uploads go in batches of about 200 MB that the worker combines (every worker since
+  1.3.8), and the Mac remembers which batches arrived. A retry after an interruption sends only the missing ones,
+  where before it started again from zero. Videos are sent as they are. On 300 drone photos (1.3 GB): Standard
+  sent 1.0 GB, Compact 740 MB, and a stopped upload resumed from its last finished batch.
 - **Drone surveys: take-off shots left out, and a few stray cameras no longer fail the run.** Photos taken near
   the ground while the rest of the flight is well above (DJI's height above take-off: under 5 m, or under 30 % of the
   flight's usual height) are left out before the camera solve. The new switch *Leave out take-off and landing shots*

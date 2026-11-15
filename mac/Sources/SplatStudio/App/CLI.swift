@@ -114,6 +114,22 @@ enum CLI {
             } catch { print("error: \(error.localizedDescription)") }
             exit(0)
         }
+        // --upload <folder> --worker <url> [--upload-quality standard|compact|original]: batched, resumable upload test
+        if let up = value("--upload"), let w = value("--worker"), let u = URL(string: w) {
+            let q = value("--upload-quality").flatMap(UploadQuality.init) ?? .current
+            let client = WorkerClient(baseURL: u, token: value("--token"))
+            let t0 = Date()
+            Task.detached {
+                do {
+                    let id = try await client.uploadDataset(directory: URL(fileURLWithPath: up), quality: q) { f in
+                        print(String(format: "  upload %.0f %%  (%.0f s)", f * 100, Date().timeIntervalSince(t0))); fflush(stdout)
+                    }
+                    print("uploaded as dataset \(id) in \(String(format: "%.1f", Date().timeIntervalSince(t0))) s")
+                    exit(0)
+                } catch { print("upload failed: \(error.localizedDescription)"); exit(1) }
+            }
+            dispatchMain()
+        }
         if let ds = value("--train") {
             do {
                 let dataset = try PreparedDataset.load(URL(fileURLWithPath: ds))

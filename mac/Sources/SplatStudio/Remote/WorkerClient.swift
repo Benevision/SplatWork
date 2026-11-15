@@ -225,6 +225,14 @@ final class WorkerClient: @unchecked Sendable {
         return id
     }
 
+    /// `GET /v1/datasets`: the ids of the datasets this computer can see on the worker.
+    func listDatasetIds() async throws -> [String] {
+        let (d, resp) = try await session.data(for: request("v1/datasets", timeout: 20))
+        try check(d, resp)
+        let arr = (try JSONSerialization.jsonObject(with: d) as? [[String: Any]]) ?? []
+        return arr.compactMap { $0["datasetId"] as? String }
+    }
+
     /// `POST /v1/datasets/file?name=…`: streams one file (e.g. a multi-GB video) as a dataset — no zip, no copy.
     func uploadFile(_ file: URL, name: String, progress: (@Sendable (Double) -> Void)? = nil) async throws -> String {
         let safe = String(name.map { $0.isLetter || $0.isNumber || "._- ".contains($0) ? $0 : "_" }).trimmingCharacters(in: CharacterSet(charactersIn: "."))
@@ -238,14 +246,6 @@ final class WorkerClient: @unchecked Sendable {
         try check(d, resp)
         guard let id = try JSONDecoder().decode([String: String].self, from: d)["datasetId"] else { throw WorkerError(status: 200, message: "no datasetId") }
         return id
-    }
-
-    /// Zips a directory (`ditto -c -k --keepParent`) and uploads it. Returns `datasetId`.
-    func uploadDataset(directory: URL, progress: (@Sendable (Double) -> Void)? = nil) async throws -> String {
-        let zip = FileManager.default.temporaryDirectory.appendingPathComponent("splat-upload-\(UUID().uuidString).zip")
-        defer { try? FileManager.default.removeItem(at: zip) }
-        try await ZipUtil.zip(directory: directory, to: zip)
-        return try await uploadDataset(zip: zip, progress: progress)
     }
 
     struct CreateJob: Encodable { var datasetId: String; var name: String; var config: TrainingConfig }
