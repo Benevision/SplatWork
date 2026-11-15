@@ -63,6 +63,8 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
 
 ## Next work
 
+The longer plan to a public release (hardening, parity, distribution, beta) is in [ROADMAP.md](ROADMAP.md).
+
 1. **Drone solving:** run the GPS-held re-solve when a GPS survey's fast solve places too few photos; let a
    worker-bound training start wait for the worker instead of failing.
 2. **Real-GPU checks of the Vulkan trainer** (RTX 4080 comparison, RX 6700 XT on SteamOS), then GPU densification —
