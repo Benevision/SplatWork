@@ -144,6 +144,15 @@ def status(c, jid):
     return c.get(f"/v1/jobs/{jid}", headers=AUTH).json()
 
 
+def train_step(c, jid) -> int:
+    """The pipeline's training step so far; 0 until its train job exists (the stage turns to "train" a moment
+    before trainJobId is set, and /v1/jobs/None is a 404 without "step")."""
+    s = status(c, jid)
+    if s.get("stage") != "train" or not s.get("trainJobId"):
+        return 0
+    return status(c, s["trainJobId"]).get("step") or 0
+
+
 def wait_state(c, jid, states, timeout=15):
     states = (states,) if isinstance(states, str) else states
     return wait_for(lambda: (lambda s: s if s["state"] in states else None)(status(c, jid)), timeout)
@@ -317,7 +326,7 @@ def test_pause_and_resume_training(tmp_path):
     with make(tmp_path / "d") as c:
         c.backend.steps, c.backend.step_delay = 60, 0.03
         jid = submit(c, upload_video(c), spec())
-        wait_for(lambda: status(c, jid)["stage"] == "train" and (status(c, status(c, jid)["trainJobId"])["step"] or 0) >= 3)
+        wait_for(lambda: train_step(c, jid) >= 3)
         # the prepared dataset is available while training runs
         assert status(c, jid)["outputDatasetId"]
         assert c.post(f"/v1/jobs/{jid}/pause", headers=AUTH).status_code == 200
@@ -350,7 +359,7 @@ def test_training_survives_a_restart(tmp_path):
     with make(data) as c:
         c.backend.steps, c.backend.step_delay = 80, 0.03
         jid = submit(c, upload_video(c), spec())
-        wait_for(lambda: status(c, jid)["stage"] == "train" and (status(c, status(c, jid)["trainJobId"])["step"] or 0) >= 3)
+        wait_for(lambda: train_step(c, jid) >= 3)
         train = status(c, jid)["trainJobId"]
     b = PipelineFake()
     b.steps = 80
