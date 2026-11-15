@@ -355,12 +355,14 @@ class _Tracker:
         return motion, zoom, parallax, rigid
 
 
-def _open(video: Path):
+def _open(video: Path, log: Callable[[str], None] = lambda m: None):
     try:
-        import av
+        import av  # noqa: F401
     except ImportError as e:
         raise SplatPrepError("old home video needs PyAV (pip install av)") from e
-    c = av.open(str(video))
+    from .videodecode import open_video
+
+    c = open_video(video, log).container       # NVDEC when it decodes the same pictures (videodecode.py)
     s = c.streams.video[0]
     s.thread_type = "AUTO"
     s.codec_context.thread_count = 0
@@ -379,7 +381,7 @@ def analyse(video: Path, opts: Dict[str, Any], progress: ProgressFn = lambda f, 
     from .frames import pixel_aspect
 
     o = {**VHS_DEFAULTS, **{k: v for k, v in (opts or {}).items() if v is not None}}
-    container, stream = _open(video)
+    container, stream = _open(video, log)
     cc = stream.codec_context
     W, H = cc.width, cc.height
     par = pixel_aspect(stream)
@@ -910,7 +912,7 @@ def prepare(video: Path, out_dir: Path, vo: Dict[str, Any], vhs_opts: Dict[str, 
                 need.update(nb)
     last_needed = max(need)
 
-    container, stream = _open(video)
+    container, stream = _open(video, log)
     cache: Dict[int, np.ndarray] = {}
     out_frames: List[Dict[str, Any]] = []
     pool = ThreadPoolExecutor(max_workers=max(2, min(8, (os.cpu_count() or 4) - 2)))

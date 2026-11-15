@@ -295,7 +295,7 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
                    progress: ProgressFn, log: Callable[[str], None] = lambda m: None,
                    stereo: Optional[Dict[str, Any]] = None, right_video: Optional[Path] = None) -> Dict[str, Any]:
     try:
-        import av
+        import av  # noqa: F401 - opened through videodecode.open_video
     except ImportError as e:
         raise SplatPrepError("frame extraction needs PyAV (pip install av)") from e
     vo = {**VIDEO_DEFAULTS, **{k: v for k, v in (vo or {}).items() if v is not None}}
@@ -305,7 +305,10 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
     images = out_dir / "images"
     images.mkdir(parents=True, exist_ok=True)
 
-    container = av.open(str(video))
+    from .videodecode import open_video
+
+    opened = open_video(video, log)     # NVDEC when it decodes the same pictures as the CPU (videodecode.py)
+    container = opened.container
     # stereo: layout, calibration, which stream is the left eye (decoding is driven by the left eye)
     st_layout = None
     st_ana = False
@@ -362,10 +365,10 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
     if start > 0:
         container.seek(int(start / stream.time_base), stream=stream, backward=True)
     if st_layout == "dualStream":
-        c2 = av.open(str(video))
+        c2 = open_video(video).container
         secondary = _Secondary(c2, c2.streams.video[1 - primary_index], 0.0, start)
     elif st_layout == "separateFiles":
-        c2 = av.open(str(right_video))
+        c2 = open_video(right_video).container
         secondary = _Secondary(c2, c2.streams.video[0], float(stereo.get("rightTimeOffset") or 0.0), start)
 
     W, H = cc.width, cc.height
@@ -585,6 +588,7 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
     finally:
         best = None
         pool.shutdown(wait=True)
+        opened.done(decoded)
         container.close()
         if secondary is not None:
             secondary.close()

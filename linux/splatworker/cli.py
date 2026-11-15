@@ -93,6 +93,7 @@ def cmd_serve(args) -> int:
         trainer=args.trainer,
         cpu_jobs=args.cpu_jobs,
         gpu_modes=dict(args.gpu_mode or []), migrate=not args.no_migrate,
+        video_decode=args.video_decode,
     )
     if settings.allow_local_datasets and not settings.local_enabled:
         logging.getLogger("splatworker").info(
@@ -424,6 +425,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--gpu-mode", type=_parse_gpu_mode, action="append", metavar="GPU=auto|always",
                    help="a slower GPU (e.g. vk:0000:11:00.0=always): auto (default) starts waiting jobs only while "
                         "the faster GPUs are busy; always uses it like any other GPU")
+    s.add_argument("--video-decode", choices=["auto", "cpu"],
+                   default=os.environ.get("SPLATWORKER_VIDEO_DECODE", "auto"),
+                   help="processing jobs decode video on the NVIDIA GPU's video engine when it gives the same "
+                        "pictures (auto), or on the CPU")
     s.add_argument("--no-migrate", action="store_true",
                    help="don't move a job from a slower GPU to a faster one when that frees up")
     s.add_argument("--cpu-jobs", type=int, default=int(os.environ.get("SPLATWORKER_CPU_JOBS", "1")),

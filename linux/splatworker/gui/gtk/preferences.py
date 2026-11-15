@@ -297,6 +297,15 @@ class Preferences:
         combo.set_selected(keys.index(self.s.trainer) if self.s.trainer in keys else 0)
         combo.connect("notify::selected", lambda r, _p: self._set("trainer", keys[r.get_selected()]))
         g.add(combo)
+        decode = [("auto", "Automatic"), ("cpu", "CPU")]
+        row = Adw.ComboRow(title="Decode video on",
+                           subtitle="Automatic uses the NVIDIA GPU's video decoder (a separate part of the GPU, so "
+                                    "training barely notices) when it gives exactly the same pictures as the CPU, "
+                                    "checked on the first frames of each video; otherwise the CPU.",
+                           model=Gtk.StringList.new([label for _, label in decode]))
+        row.set_selected(next((i for i, (k, _) in enumerate(decode) if k == self.s.video_decode), 0))
+        row.connect("notify::selected", lambda r, _p: self._set("video_decode", decode[r.get_selected()][0]))
+        g.add(row)
         self._spin(g, "cpu_jobs", "Processing jobs at once",
                    "Camera solves, masks and frame extraction use the GPU only for their GPU steps, so they run "
                    "alongside training. Mapping already uses every CPU core: 1 is usually best.", 1, 8, 1)

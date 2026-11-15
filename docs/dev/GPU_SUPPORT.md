@@ -453,6 +453,20 @@ On BensPC (1.7.9, the NVIDIA runtime set up, trainer setting left on Automatic):
 3. Send back the table (the CLI prints it; `trainer-comparisons.json` in `~/.var/app/com.example.SplatWorker/config/…`
    has it too): steps/s, VRAM, PSNR, SSIM for each trainer.
 
+**Video decoding on NVDEC (1.7.10).** PyAV's wheel (19.0.2) has FFmpeg with NVDEC / CUVID (H.264, HEVC, AV1) and
+Intel QSV but no VA-API (no libva), so the Ryzen's Radeon can't decode through it; an iGPU path would need PyAV built
+against the GNOME runtime's FFmpeg (+ codecs-extra) for the processing runtime's Python 3.10. `splatprep/videodecode.py`
+opens videos for frames.py (stereo too) and vhs.py: with *Decode video on: Automatic* (`SPLATPREP_VIDEO_DECODE`,
+`serve --video-decode auto|cpu`) it checks once per codec and size that NVDEC gives the same first 6 frames as the
+CPU (grey identical — what frame picking scores — colour within 2 levels) and else uses the CPU; the log names the
+decoder and its frames per second.
+
+On BensPC (1.7.10): process the same video twice from the Mac or Studio (a Video project), once with *Settings →
+Training → Decode video on: CPU* and once with *Automatic*. In both job logs look for "video decoding: …" (the
+second should say NVDEC and "grey identical"), and compare the decode rate ("N frames in X s (Y fps)"), the job's
+total time and CPU load (e.g. `htop`). The picked frames (frames.json, or the frame count in the log) should be
+the same. Running it while the 4080 trains shows how little NVDEC slows training.
+
 **Test on BensPC: a block run moving to the 4080 (1.7.8).** With 1.7.8, the Vulkan trainer and the 610M ticked
 (*Only when faster GPUs are busy*), send a 2-block run from the Mac. Block 1 starts on the 4080 and block 2 on the
 610M (the Jobs page shows the GPU); when block 1 finishes, block 2's log says "moved from AMD Radeon 610M

@@ -46,6 +46,7 @@ class AppSettings:
     # slower GPUs: {"vk:<pci>" or a CUDA index as text: "auto" | "always"}; move jobs to a faster GPU when free
     gpu_modes: Dict[str, str] = dataclasses.field(default_factory=dict)
     migrate_jobs: bool = True
+    video_decode: str = "auto"          # "auto" (NVDEC when it gives the same pictures) | "cpu"
     # Extra components the setup assistant installed (informational, kept here so the
     # "repair" button can reinstall the same set).
     with_splatprep: bool = True
@@ -127,6 +128,7 @@ class AppSettings:
         check("gpu_modes", isinstance(self.gpu_modes, dict) and all(
             isinstance(k, str) and v in ("auto", "always") for k, v in self.gpu_modes.items()), "Unknown GPU mode.")
         check("migrate_jobs", is_bool(self.migrate_jobs), "Must be on or off.")
+        check("video_decode", self.video_decode in ("auto", "cpu"), "Unknown video decoding choice.")
         check("log_level", self.log_level in ("critical", "error", "warning", "info", "debug"),
               "Unknown log level.")
         for name in ("require_token", "mdns", "start_server_on_launch", "run_in_background",
@@ -166,6 +168,8 @@ class AppSettings:
                 args += ["--gpu-mode", f"{key}={mode}"]
         if not self.migrate_jobs:
             args += ["--no-migrate"]
+        if self.video_decode != "auto":
+            args += ["--video-decode", self.video_decode]
         return args
 
 

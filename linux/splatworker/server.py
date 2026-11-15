@@ -1239,6 +1239,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     from .gpu import backend_description, list_gpus
 
     backend = backend or SubprocessBackend(trainer=settings.trainer)
+    # job processes inherit it: splatprep's videodecode.py reads SPLATPREP_VIDEO_DECODE
+    os.environ["SPLATPREP_VIDEO_DECODE"] = settings.video_decode if settings.video_decode in ("auto", "cpu") else "auto"
     for d in (settings.datasets_dir, settings.jobs_dir, settings.tmp_dir):
         d.mkdir(parents=True, exist_ok=True)
     try:

@@ -6,6 +6,13 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.10 — video decoding on the NVIDIA GPU's video decoder:** frame extraction and home-video
+  restoration can decode H.264, HEVC and AV1 on NVDEC, a separate part of the GPU, so the CPU stays free and
+  training barely notices. It is used only when it gives the same pictures as the CPU: the first frames of each
+  video are decoded both ways and must match (grey images identical, colour within 2 levels). Otherwise, and on any
+  error, decoding falls back to the CPU. *Settings → Training → Decode video on: Automatic / CPU*. The job log says
+  which decoder ran and at how many frames per second. AMD and Intel GPUs keep decoding on the CPU: PyAV's FFmpeg
+  has no VA-API.
 - **SplatWork for Linux 1.7.9 — compare the CUDA and Vulkan trainers in the app:** *Models & Benchmarks → Compare
   trainers* (or `splatworker benchmark --compare-trainers [--quick] [--both-strategies]`) trains the benchmark
   scene on the same GPU with gsplat and then with the Vulkan trainer, at the same settings and seed. It shows a

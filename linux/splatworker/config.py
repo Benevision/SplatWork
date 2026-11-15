@@ -350,6 +350,9 @@ class ServerSettings:
     # faster one when it frees up (Vulkan trainer)
     gpu_modes: Dict[str, str] = field(default_factory=dict)
     migrate: bool = True
+    # video decoding in processing jobs (splatprep videodecode.py): "auto" — the NVIDIA GPU's video engine (NVDEC)
+    # when it decodes the same pictures as the CPU — or "cpu"
+    video_decode: str = "auto"
 
     @property
     def local_enabled(self) -> bool:
