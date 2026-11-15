@@ -352,6 +352,7 @@ struct BlockRowsView: View {
                     HStack(spacing: 6) {
                         Image(systemName: icon(r)).foregroundStyle(color(r)).frame(width: 16)
                         Text(r.device).bold().lineLimit(1)
+                        if let g = r.snapshot.gpu { Text("· \(shortGPUName(g))").foregroundStyle(.secondary).lineLimit(1) }
                         Text("block \(r.id + 1)/\(rows.count)").foregroundStyle(.secondary)
                         Spacer(minLength: 4)
                         Text(r.stage.label).foregroundStyle(color(r)).lineLimit(1)

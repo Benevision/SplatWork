@@ -269,8 +269,14 @@ struct ComputeScheduler: Sendable {
             assignment[f, default: []] += bs
         }
         let tracker = BlockProgressTracker(count: blocks.count)
-        // A retried block can move to another device: one block at a time per device, and one upload per worker.
-        let deviceLocks = DeviceLocks()
+        // A retried block can move to another device: one block at a time per device (a worker with several training
+        // GPUs: one per GPU, ≥ 1.7.8 — it places the blocks and moves them to a faster GPU itself), one upload per worker.
+        var capacity: [String: Int] = [:]
+        for dev in Set(assignment.keys).union(clients.keys) where dev != "local" {
+            if let c = clients[dev], let inf = try? await c.info(timeout: 10) { capacity[dev] = inf.trainingSlots }
+        }
+        let deviceLocks = DeviceLocks(capacity: capacity)
+        let uploadLocks = DeviceLocks()
         let datasetIds = DatasetIdCache()
         // Every block shows up straight away, on its device, before any work starts.
         for (dev, bs) in assignment {
@@ -301,10 +307,18 @@ struct ComputeScheduler: Sendable {
                 // the worker may already hold the photos (split / masked / solved there): send only the rest
                 var datasetId = datasetIds.get(dev)
                 if datasetId == nil {
-                    stageOnly(.uploading(0))
-                    datasetId = try await client.uploadReusing(RemoteStore.usable(at: dataset.root, by: client), directory: dataset.root,
-                                                               progress: { stageOnly(.uploading($0)) })
-                    datasetIds.set(dev, datasetId)
+                    // several blocks can start on one worker at once: the first uploads, the others wait for it
+                    await uploadLocks.acquire(dev)
+                    datasetId = datasetIds.get(dev)
+                    if datasetId == nil {
+                        do {
+                            stageOnly(.uploading(0))
+                            datasetId = try await client.uploadReusing(RemoteStore.usable(at: dataset.root, by: client), directory: dataset.root,
+                                                                       progress: { stageOnly(.uploading($0)) })
+                            datasetIds.set(dev, datasetId)
+                        } catch { uploadLocks.release(dev); throw error }
+                    }
+                    uploadLocks.release(dev)
                 }
                 stageOnly(.queued)
                 let usedDataset = datasetId
@@ -383,9 +397,9 @@ struct ComputeScheduler: Sendable {
         return try await withThrowingTaskGroup(of: [(SceneBlock, GaussianCloud)].self) { group in
             for (dev, bs) in assignment {
                 group.addTask {
-                    // A failed block waits for a decision in its own task, so the device goes on with its other blocks.
-                    try await withThrowingTaskGroup(of: (SceneBlock, GaussianCloud)?.self) { waiting in
-                        var results: [(SceneBlock, GaussianCloud)] = []
+                    // Each block in its own task: the device lock admits as many at once as the device has training
+                    // GPUs (one on most), in order; a failed block waits for a decision without holding the device.
+                    try await withThrowingTaskGroup(of: (SceneBlock, GaussianCloud)?.self) { blockTasks in
                         for b in bs {
                             try Task.checkCancellation()
                             // Finished in an earlier, interrupted run of the same settings: reuse it.
@@ -394,20 +408,24 @@ struct ComputeScheduler: Sendable {
                                 let snap = TrainingProgressSnapshot(step: config.iterations, totalSteps: config.iterations, numGaussians: cloud.count)
                                 progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: snap, overall: tracker.update(b.index, 1), stage: .done))
                                 preview?(b.index, cloud)
-                                results.append((b, cloud))
+                                blockTasks.addTask { (b, cloud) }
                                 continue
                             }
-                            let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: config.iterations))
-                            do {
-                                results.append(complete(b, try await run(b, on: dev, last: last), on: dev, last: last))
-                            } catch {
-                                if error is CancellationError || Task.isCancelled { throw error }
-                                reportFailed(b, on: dev, last: last, error)
-                                guard let retryGate else { throw error }
-                                waiting.addTask { try await awaitDecision(b, failedOn: dev, gate: retryGate) }
+                            blockTasks.addTask {
+                                let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: config.iterations))
+                                do {
+                                    return complete(b, try await run(b, on: dev, last: last), on: dev, last: last)
+                                } catch {
+                                    if error is CancellationError || Task.isCancelled { throw error }
+                                    reportFailed(b, on: dev, last: last, error)
+                                    guard let retryGate else { throw error }
+                                    return try await awaitDecision(b, failedOn: dev, gate: retryGate)
+                                }
                             }
+                            await Task.yield()      // let this block queue for the device before the next one
                         }
-                        for try await r in waiting { if let r { results.append(r) } }
+                        var results: [(SceneBlock, GaussianCloud)] = []
+                        for try await r in blockTasks { if let r { results.append(r) } }
                         return results
                     }
                 }
@@ -486,14 +504,19 @@ final class BlockRetryGate: @unchecked Sendable {
 /// One block at a time per device.
 final class DeviceLocks: @unchecked Sendable {
     private let lock = NSLock()
-    private var busy: Set<String> = []
+    private var inUse: [String: Int] = [:]
     private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    /// How many holders each device admits at once (default 1): a worker with several training GPUs takes as many
+    /// blocks as it has GPUs and places / moves them itself.
+    private let capacity: [String: Int]
+
+    init(capacity: [String: Int] = [:]) { self.capacity = capacity }
 
     func acquire(_ d: String) async {
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             lock.lock()
-            if busy.contains(d) { waiters[d, default: []].append(c); lock.unlock() }
-            else { busy.insert(d); lock.unlock(); c.resume() }
+            if inUse[d, default: 0] >= max(1, capacity[d] ?? 1) { waiters[d, default: []].append(c); lock.unlock() }
+            else { inUse[d, default: 0] += 1; lock.unlock(); c.resume() }
         }
     }
 
@@ -501,9 +524,9 @@ final class DeviceLocks: @unchecked Sendable {
         lock.lock()
         if var w = waiters[d], !w.isEmpty {
             let c = w.removeFirst(); waiters[d] = w
-            lock.unlock(); c.resume()       // hand the device straight to the next waiter
+            lock.unlock(); c.resume()       // hand the place straight to the next waiter
         } else {
-            busy.remove(d); lock.unlock()
+            inUse[d] = max(0, inUse[d, default: 1] - 1); lock.unlock()
         }
     }
 }

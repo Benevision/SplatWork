@@ -23,6 +23,23 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     /// Host RAM (worker ≥ 1.3.14).
     struct Memory: Codable, Hashable, Sendable { var totalMB: Int?; var availableMB: Int? }
     var memory: Memory?
+    /// Worker ≥ 1.7.3: one job slot per GPU (`kinds` e.g. ["train", "process"]). From 1.7.8 a slower GPU's slot also
+    /// starts waiting train jobs (block runs included) and the worker moves them to a faster GPU when one frees up.
+    struct Slot: Codable, Hashable, Sendable {
+        var id: String
+        var name: String?
+        var kinds: [String]?
+        var integrated: Bool?
+        var slow: Bool?
+    }
+    var slots: [Slot]?
+    /// How many training jobs the worker runs at once: one per training slot on workers that place and move jobs
+    /// between their GPUs themselves (≥ 1.7.8), else one.
+    var trainingSlots: Int {
+        let v = (workerVersion ?? "0").split(separator: ".").compactMap { Int($0) }
+        guard v.count >= 3, !v.lexicographicallyPrecedes([1, 7, 8]) else { return 1 }
+        return max(1, slots?.filter { $0.kinds?.contains("train") ?? false }.count ?? 1)
+    }
     /// What runs the worker: "mac" (SplatWork's "act as a worker"), nil for the SplatWork for Linux. "iphone" comes from
     /// older SplatWork Capture versions, which could act as workers; those are ignored.
     var kind: String?
@@ -119,6 +136,10 @@ struct JobStatus: Codable, Hashable, Sendable, Identifiable {
     var trainJobId: String?
     /// A step of a whole-pipeline job: that job's id.
     var parentJobId: String?
+    /// The GPU the job runs on, e.g. "NVIDIA GeForce RTX 4080", and (≥ 1.7.8) its slot, e.g. "cuda:0"; both change
+    /// when the worker moves the job to another GPU.
+    var gpu: String?
+    var slot: String?
     var id: String { jobId }
 
     var fraction: Double {

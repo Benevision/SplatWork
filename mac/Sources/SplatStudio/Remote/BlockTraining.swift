@@ -10,6 +10,8 @@ struct TrainingProgressSnapshot: Sendable, Hashable {
     var numGaussians: Int
     var elapsed: TimeInterval
     var eta: TimeInterval?
+    /// The worker GPU training it ("NVIDIA GeForce RTX 4080"); nil on this Mac.
+    var gpu: String? = nil
 
     var fraction: Double { totalSteps > 0 ? min(1, Double(step) / Double(totalSteps)) : 0 }
 
@@ -21,6 +23,7 @@ struct TrainingProgressSnapshot: Sendable, Hashable {
     init(_ s: JobStatus) {
         self.init(step: s.step ?? 0, totalSteps: s.totalSteps ?? 0, loss: s.loss, psnr: s.psnr, numGaussians: s.numGaussians ?? 0,
                   elapsed: s.elapsedSeconds ?? 0, eta: s.etaSeconds)
+        gpu = s.gpu
     }
 }
 
@@ -226,4 +229,12 @@ enum BlockMerger {
         }
         return out
     }
+}
+
+/// "NVIDIA GeForce RTX 4080" → "RTX 4080", "AMD Radeon 610M (integrated)" → "Radeon 610M": short enough for a row.
+func shortGPUName(_ name: String) -> String {
+    var s = name
+    for p in ["NVIDIA GeForce ", "NVIDIA ", "AMD ", "Intel(R) ", "Intel "] where s.hasPrefix(p) { s.removeFirst(p.count); break }
+    if let r = s.range(of: " (integrated)") { s.removeSubrange(r) }
+    return s
 }

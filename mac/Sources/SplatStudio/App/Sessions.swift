@@ -365,6 +365,7 @@ final class TrainingSession {
                 s.elapsed = js.elapsedSeconds ?? Date().timeIntervalSince(start); s.eta = js.etaSeconds ?? 0
                 s.itersPerSecond = s.elapsed > 0 ? Double(s.step) / s.elapsed : 0
                 s.phase = js.message ?? "Training on \(client.baseURL.host ?? "worker")"
+                s.gpu = js.gpu.map(shortGPUName)
                 self.update(s)
             }
         }

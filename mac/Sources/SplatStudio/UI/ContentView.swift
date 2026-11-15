@@ -366,6 +366,7 @@ struct TrainingBanner: View {
                 Text(String(format: "PSNR %.1f dB", session.status.evalPSNR ?? session.status.psnr)).monospacedDigit()
                 Text("\(formatCount(session.status.numGaussians)) splats").monospacedDigit()
                 Text("ETA \(formatDuration(session.status.eta))").monospacedDigit().foregroundStyle(.secondary)
+                if let g = session.status.gpu { Text("on \(g)").foregroundStyle(.secondary).lineLimit(1) }
             }
             if session.state == .paused {
                 Button("Resume") { session.resume() }

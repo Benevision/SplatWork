@@ -6,6 +6,10 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Block runs use every GPU on a Linux worker.** A worker with several training GPUs (SplatWork for Linux 1.7.8 or
+  newer, e.g. an RTX 4080 with an integrated Radeon) now gets as many blocks at once as it has GPUs. Before, the Mac
+  sent it one block at a time. The worker decides where each block runs and moves a block to a faster GPU when one
+  frees up. Each block's row in *Devices* and the progress bar show the GPU it is on ("BensPC · RTX 4080").
 - **SplatWork for Linux 1.7.10 — video decoding on the NVIDIA GPU's video decoder:** frame extraction and home-video
   restoration can decode H.264, HEVC and AV1 on NVDEC, a separate part of the GPU, so the CPU stays free and
   training barely notices. It is used only when it gives the same pictures as the CPU: the first frames of each

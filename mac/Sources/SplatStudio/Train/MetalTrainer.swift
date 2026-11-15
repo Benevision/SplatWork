@@ -37,6 +37,8 @@ struct TrainerStatus: Sendable, Equatable {
     var phase = "Starting"
     /// Set when the per-photo colour correction had to be reset or turned off (see guardColourCorrection).
     var colourNote: String? = nil
+    /// Training on a Linux worker: the GPU it runs on (changes when the worker moves the job).
+    var gpu: String? = nil
 }
 
 enum TrainerError: LocalizedError {
