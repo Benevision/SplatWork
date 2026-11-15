@@ -100,6 +100,17 @@ jobs:
           # MSVC has no __builtin_clzll (host code): ceil(log2(x)) = bit length of x - 1
           sed -i -E 's/return 64u - static_cast<uint32_t>\(__builtin_clzll\(x - 1\)\);/uint32_t n = 0; for(uint64_t v = x - 1; v != 0; v >>= 1) { ++n; } return n;/' gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu
           ! grep -rn "__builtin_clz" gsplat/cuda/csrc --include=*.cu --include=*.cpp
+          # Windows link: torch_cuda.dll instantiates at::cuda::cub::radix_sort_pairs_impl but doesn't export it (Linux
+          # links it anyway), so the batch-replay sort calls cub directly, as IntersectTile.cu and SparseTileLayout.cu do
+          F=gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu
+          perl -0pi -e 's/at::cuda::cub::radix_sort_pairs<int64_t, int32_t>\(\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*(total_batches),\s*\/\*descending=\*\/false,\s*\/\*begin_bit=\*\/0,\s*\/\*end_bit=\*\/(static_cast<int64_t>\(total_bits == 0 \? 1u : total_bits\))\s*\);/CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, $1, $2, $3, $4, $5, 0, static_cast<int>($6), at::cuda::getCurrentCUDAStream());/s; s/(#\s*include <ATen\/cuda\/cub.h>\n)/$1#    include <c10\/cuda\/CUDACachingAllocator.h>\n#    include <cub\/cub.cuh>\n/' $F
+          grep -n "CUB_WRAPPER(cub::DeviceRadixSort::SortPairs" $F
+          ! grep -n "at::cuda::cub::radix_sort_pairs" $F
+          # the definition says `const bool fwd_only` where the header (not included by this file) says `bool`; make
+          # them identical so both sides refer to the same symbol
+          F=gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchFwd.cu
+          sed -i -E 's/^(\s*)const bool fwd_only,/\1bool fwd_only,/' $F
+          ! grep -n "const bool fwd_only" $F
       # Resumable build: one compile of every file takes about 6 hours on a 4-core runner, longer than a job may run.
       # The object files (C:\g\build) are cached even when the build fails or runs out of time, and the next run
       # reuses them. Ninja rebuilds an object when an input is newer, and a fresh clone makes every input new, so
@@ -150,7 +161,13 @@ jobs:
           python -m pip wheel -v --no-deps --no-build-isolation -w "$env:GITHUB_WORKSPACE\wheels-win" . *>&1 |
             Tee-Object -FilePath "$env:GITHUB_WORKSPACE\gsplat-build.log" |
             Select-String -Pattern '^\s*\[\d+/\d+\]|error|FAILED|Successfully built' | ForEach-Object { $_.Line.Substring(0, [Math]::Min(400, $_.Line.Length)) }
-          if (-not (Get-ChildItem "$env:GITHUB_WORKSPACE\wheels-win\gsplat-*win_amd64.whl" -ErrorAction SilentlyContinue)) { exit 1 }
+          if (-not (Get-ChildItem "$env:GITHUB_WORKSPACE\wheels-win\gsplat-*win_amd64.whl" -ErrorAction SilentlyContinue)) {
+            # link diagnostics: what the objects define for the kernels the linker reports missing
+            Get-ChildItem C:\g\build -Recurse -Filter RasterizeToPixelsFromWorld3DGSParallelBatch*.obj | ForEach-Object {
+              "== $($_.Name)"; dumpbin /symbols $_.FullName | Select-String 'launch_rasterize_to_pixels_from_world_3dgs_parallel_batch|radix_sort' |
+                ForEach-Object { $_.Line.Substring(0, [Math]::Min(600, $_.Line.Length)) } }
+            exit 1
+          }
           Get-ChildItem "$env:GITHUB_WORKSPACE\wheels-win"
       - name: Keep only up-to-date objects
         if: always() && steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
