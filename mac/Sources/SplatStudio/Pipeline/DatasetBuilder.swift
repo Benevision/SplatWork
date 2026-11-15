@@ -475,6 +475,7 @@ enum DatasetBuilder {
             var sp = SplatPrepPoseSolver(features: feat, matching: matching, mapper: mapper, cameraModel: cameraModel)
             sp.priorPoses = priors
             sp.resizeMax = o.maxImageSize
+            sp.skipTakeoff = o.photos.skipTakeoff ? nil : false
             if o.compute != .thisMac, let worker {
                 sol = try await RemoteSplatPrepPoseSolver(client: worker, local: sp).solve(frames, progress: progress)
             } else {

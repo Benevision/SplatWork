@@ -152,6 +152,15 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
             raise RequestError(f"priorPoses not found: {req['priorPoses']}")
         priors = match_priors(load_priors(ppath), names)
     sp = StagedProgress(progress, SFM_STAGES)
+    skipped_takeoff = []
+    if not priors and req.get("skipTakeoff", True):
+        from .gps import takeoff_shots
+
+        drop, thr = takeoff_shots([image_dir / n for n in names])
+        if drop and len(drop) < 0.3 * len(names):
+            skipped_takeoff = [n for i, n in enumerate(names) if i in drop]
+            names = [n for i, n in enumerate(names) if i not in drop]
+            sp.message("pairs", f"left out {len(skipped_takeoff)} take-off / landing photo(s) below {thr:.0f} m above take-off")
     device = select_device(req.get("device"))
     sp.message("pairs", f"{model_id}: {len(names)} images, device {device}")
     ctx = SfMContext(
@@ -169,6 +178,8 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
     )
     result = backend.run(ctx)
     stats: dict = {"task": "sfm", "model": model_id, "device": device, "numImages": len(names), **result.info}
+    if skipped_takeoff:
+        stats["skippedTakeoff"] = skipped_takeoff
     if result.reconstruction is None:
         if result.matching is not None:
             result.matching.save(out_dir / "matches.npz")

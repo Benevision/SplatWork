@@ -1,5 +1,6 @@
 """Drone surveys are matched by GPS neighbours: neighbouring flight lines get paired, far-apart look-alikes don't,
 and the learned backend picks this for "auto" when nearly every photo has GPS."""
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -106,3 +107,55 @@ def test_merging_models_keeps_each_models_intrinsics_and_points():
     assert (fa, fb) == (100.0, 120.0)
     pa, pb = m.images[1].point3D_ids[0], m.images[2].point3D_ids[0]
     assert pa != pb and pa in m.points3D and pb in m.points3D and m.images[1].point3D_ids[1] == -1
+
+
+def _drone_jpeg(path, rel_alt):
+    im = Image.fromarray(np.zeros((8, 8, 3), np.uint8))
+    xmp = ('<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+           f'<rdf:Description xmlns:drone-dji="http://www.dji.com/drone-dji/1.0/" drone-dji:RelativeAltitude="{rel_alt:+.2f}"/>'
+           '</rdf:RDF></x:xmpmeta>')
+    im.save(path, xmp=xmp.encode())
+
+
+def test_takeoff_shots_are_found_only_on_a_real_flight(tmp_path):
+    from splatprep.gps import takeoff_shots
+
+    alts = [0.0, 0.4, 3.0] + [38.0] * 40 + [1.2]            # climbing away, the survey, landing
+    paths = []
+    for i, a in enumerate(alts):
+        p = tmp_path / f"{i:03d}.jpg"
+        _drone_jpeg(p, a)
+        paths.append(p)
+    drop, thr = takeoff_shots(paths)
+    assert drop == {0, 1, 2, 43} and abs(thr - 11.4) < 0.1
+    low = [tmp_path / "low.jpg"]                          # a low flight: nothing is a take-off shot
+    for i in range(20):
+        p = tmp_path / f"l{i}.jpg"
+        _drone_jpeg(p, 6.0 if i else 0.5)
+        low.append(p)
+    assert takeoff_shots(low[1:])[0] == set()
+
+
+def test_a_good_solve_with_a_few_far_cameras_passes(tmp_path, monkeypatch):
+    import splatprep.gps as gps
+
+    class Im:
+        def __init__(self, c): self.c = np.asarray(c, float)
+        def center(self): return self.c
+
+    rng = np.random.default_rng(1)
+    enu = np.c_[rng.uniform(0, 180, 200), rng.uniform(0, 140, 200), rng.uniform(30, 40, 200)]
+    solved = enu + rng.normal(0, 0.7, enu.shape)
+    solved[:8] += 40                                       # 4 % far off (take-off shots, a stray pass)
+    names = [f"{i}.jpg" for i in range(200)]
+
+    class Rec:
+        def image_by_name(self): return {n: Im(solved[i]) for i, n in enumerate(names)}
+
+    gpsd = {n: tuple(enu[i]) for i, n in enumerate(names)}
+    monkeypatch.setattr(gps, "read_gps", lambda p: gpsd.get(Path(p).name))
+    monkeypatch.setattr(gps, "to_enu", lambda a: np.asarray(a, float))
+    chk = gps.check_against_gps(Rec(), tmp_path, names)
+    assert chk["ok"] and len(chk["outliers"]) == 8 and chk["medianM"] < 2
+    solved[:60] += 30                                     # 30 % far off: a folded solve still fails
+    assert not gps.check_against_gps(Rec(), tmp_path, names)["ok"]

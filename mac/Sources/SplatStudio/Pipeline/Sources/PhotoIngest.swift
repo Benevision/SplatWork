@@ -20,6 +20,10 @@ struct PhotoIngestOptions: Codable, Hashable, Sendable {
     /// Keep each photo's location (GPS, and a drone's height above take-off) in the imported copy, so camera solving
     /// can check the solve against it and put the scene in metres. Off: imported photos carry no location at all.
     var keepLocation: Bool = true
+    /// Drone flights: leave out take-off and landing shots (photos near the ground while the rest fly well above),
+    /// which look at the horizon or the launch spot and only confuse the camera solve. Needs the height above
+    /// take-off DJI stores in each photo.
+    var skipTakeoff: Bool = true
     /// Output encoding of the written images.
     var encoding: ImageUtil.Encoding = .jpeg
 
@@ -30,7 +34,7 @@ struct PhotoIngestOptions: Codable, Hashable, Sendable {
         maxImageSize = c(.maxImageSize, maxImageSize); rejectBlurry = c(.rejectBlurry, rejectBlurry)
         blurRelativeThreshold = c(.blurRelativeThreshold, blurRelativeThreshold); blurAbsoluteThreshold = c(.blurAbsoluteThreshold, blurAbsoluteThreshold)
         rejectDuplicates = c(.rejectDuplicates, rejectDuplicates); duplicateHammingThreshold = c(.duplicateHammingThreshold, duplicateHammingThreshold)
-        recursive = c(.recursive, recursive); encoding = c(.encoding, encoding); keepLocation = c(.keepLocation, keepLocation)
+        recursive = c(.recursive, recursive); encoding = c(.encoding, encoding); keepLocation = c(.keepLocation, keepLocation); skipTakeoff = c(.skipTakeoff, skipTakeoff)
     }
 }
 

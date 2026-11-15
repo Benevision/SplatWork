@@ -76,6 +76,7 @@ enum RemotePipeline {
         r.imagesDir = "images"; r.outputDir = "sfm"
         r.cameraModel = o.sfmCameraModel
         r.resizeMax = o.maxImageSize
+        r.skipTakeoff = o.photos.skipTakeoff ? nil : false
         return (r, sequential)
     }
 

@@ -756,6 +756,10 @@ struct NewProjectSheet: View {
             }
             if sv.withLocation > 0 {
                 SettingRow(id: "source.useLocation") { Toggle("", isOn: $options.photos.keepLocation).labelsHidden() }
+                if sv.isDrone || aerial {
+                    SettingRow(id: "source.skipTakeoff") { Toggle("", isOn: $options.photos.skipTakeoff).labelsHidden() }
+                        .disabled(!options.photos.keepLocation)
+                }
                 Text("\(sv.withLocation) of the \(sv.sampled) photos checked have a location. "
                      + (solverKind == .learned ? "Learned camera solving uses them to check the cameras and put the scene in metres."
                         : "Only learned camera solving uses them (Camera solver on the next page); Object Capture ignores them."))

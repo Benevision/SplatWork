@@ -6,6 +6,12 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Drone surveys: take-off shots left out, and a few stray cameras no longer fail the run.** Photos taken near
+  the ground while the rest of the flight is well above (DJI's height above take-off: under 5 m, or under 30 % of the
+  flight's usual height) are left out before the camera solve. The new switch *Leave out take-off and landing shots*
+  is on by default. After the solve, when the cameras as a whole match GPS (median error under a quarter of the
+  limit), up to 15 % that are far from their GPS position are left out instead of stopping the run. On the
+  1,227-photo survey a good solve, typically 1 m from GPS with 4 % far off, used to stop. A folded solve still stops.
 - **A new preparation screen on the Mac:** a progress ring with elapsed time and time left. A timeline shows every
   step with its time: photos, upload, masks, sky, camera solve, finalise, download. A card for the current step
   says where it runs (this Mac or a Linux worker) and gives live counters with a rate ("9,866 of 14,128 pairs"),

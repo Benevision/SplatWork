@@ -487,6 +487,17 @@
    "advanced": false
   },
   {
+   "id": "source.skipTakeoff",
+   "group": "Sources & frame extraction",
+   "title": "Leave out take-off and landing shots",
+   "summary": "Drop drone photos taken near the ground before the cameras are solved.",
+   "detail": "A drone usually takes a few photos while climbing away or coming in to land: low, looking at the horizon or the launch spot. They rarely match the survey and can pull the camera solve apart. With this on, photos taken below 5 m above take-off (or below 30 % of the flight's usual height, whichever is higher) are left out before solving, when most of the flight is well above that. It needs the height above take-off DJI stores in each photo, so it does nothing for phone photos. Separately, after solving, the few cameras far from their GPS position are always left out when the rest of the solve matches GPS.",
+   "defaultValue": "On",
+   "range": "",
+   "effects": "",
+   "advanced": false
+  },
+  {
    "id": "source.aerial",
    "group": "Sources & frame extraction",
    "title": "Aerial settings",

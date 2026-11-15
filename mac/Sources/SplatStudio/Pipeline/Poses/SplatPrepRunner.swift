@@ -56,6 +56,8 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var cameraGroups: [String: Int]? = nil
     /// task = sfm with cameraGroups: {clip id: camera travel} from vhs.json — lets splatprep leave out wrongly joined clips.
     var clipTravel: [String: Double]? = nil
+    /// task = sfm: leave out a drone flight's take-off / landing shots before solving (splatprep default: on).
+    var skipTakeoff: Bool? = nil
 
     struct VHS: Codable, Hashable, Sendable {
         var analyseOnly: Bool? = nil
@@ -242,6 +244,8 @@ struct SplatPrepPoseSolver: PoseSolver {
     var priorPoses: String? = nil
     /// Use masks of the frames to drop keypoints on masked pixels.
     var useMasks: Bool = true
+    /// Leave out a drone flight's take-off / landing shots (nil: splatprep's default, on).
+    var skipTakeoff: Bool? = nil
 
     /// Builds the request for a frame set (also used for remote `/v1/process`).
     func request(for frames: FrameSet) -> ProcessingRequest {
@@ -249,6 +253,7 @@ struct SplatPrepPoseSolver: PoseSolver {
         r.imagesDir = "images"; r.outputDir = "sfm"
         r.features = features; r.matching = matching; r.mapper = mapper; r.cameraModel = cameraModel
         r.maxKeypoints = maxKeypoints; r.resizeMax = resizeMax; r.priorPoses = priorPoses
+        r.skipTakeoff = skipTakeoff
         let sizes = Set(frames.frames.map { "\($0.width)x\($0.height)" })
         r.singleCamera = sizes.count == 1 && frames.rig == nil
         if frames.rig == nil, !frames.isMultiViewRig, frames.frames.contains(where: { $0.cameraGroup != nil }) {
