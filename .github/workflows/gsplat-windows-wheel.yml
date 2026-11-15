@@ -196,9 +196,12 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
         shell: bash
         run: |
-          python -m pip install --no-deps wheels-win/gsplat-*win_amd64.whl
-          cd "$RUNNER_TEMP" && python -c "import gsplat, gsplat.cuda._backend as b; print('gsplat', gsplat.__version__, 'extension', b.__file__)" || \
-            python -c "import gsplat; print('gsplat', gsplat.__version__)"
+          # with its dependencies (rich, jaxtyping …); torch is already the pinned cu128 build
+          python -m pip install wheels-win/gsplat-*win_amd64.whl
+          # the compiled extension itself must load (not gsplat's fallback that compiles it on first use)
+          cd "$RUNNER_TEMP"
+          python -c "import torch, gsplat.csrc as C; print('extension', C.__file__, len(dir(C)), 'symbols')"
+          python -c "import gsplat; print('gsplat', gsplat.__version__)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
