@@ -254,11 +254,14 @@ int main(int argc, char** argv) {
     try {
         if (mode == "info") {
             Context ctx(co);
-            std::printf("{\"device\": \"%s\", \"driver\": \"%s\", \"vendorID\": %u, \"deviceID\": %u, \"vulkan\": \"%u.%u\", "
-                        "\"subgroupSize\": %u, \"floatAtomicAdd\": %s, \"nativeAtomics\": %s}\n",
-                        ctx.info.name.c_str(), ctx.info.driver.c_str(), ctx.info.vendorID, ctx.info.deviceID,
-                        VK_API_VERSION_MAJOR(ctx.info.apiVersion), VK_API_VERSION_MINOR(ctx.info.apiVersion), ctx.info.subgroupSize,
-                        ctx.info.floatAtomicAdd ? "true" : "false", ctx.nativeAtomics ? "true" : "false");
+            nlohmann::json j = {{"device", ctx.info.name}, {"driver", ctx.info.driver}, {"vendorID", ctx.info.vendorID},
+                                {"deviceID", ctx.info.deviceID}, {"deviceType", ctx.info.deviceType},
+                                {"memoryMB", ctx.info.deviceLocalBytes >> 20},
+                                {"vulkan", std::to_string(VK_API_VERSION_MAJOR(ctx.info.apiVersion)) + "." +
+                                               std::to_string(VK_API_VERSION_MINOR(ctx.info.apiVersion))},
+                                {"subgroupSize", ctx.info.subgroupSize}, {"floatAtomicAdd", ctx.info.floatAtomicAdd},
+                                {"nativeAtomics", ctx.nativeAtomics}, {"interface", VKTRAIN_INTERFACE}};
+            std::printf("%s\n", j.dump().c_str());
             return 0;
         }
         if (mode == "dump") return dump(scene, out, co);

@@ -38,6 +38,8 @@ class AppSettings:
     autostart: bool = False
     auto_update: bool = True            # Flatpak: install updates and restart into them when no job runs
     log_level: str = "info"
+    # Which trainer trains: "auto" (gsplat on NVIDIA, the Vulkan trainer on AMD / Intel), "gsplat", "vulkan"
+    trainer: str = "auto"
     # Extra components the setup assistant installed (informational, kept here so the
     # "repair" button can reinstall the same set).
     with_splatprep: bool = True
@@ -114,6 +116,7 @@ class AppSettings:
               "Maximum upload size must be between 0.1 and 10000 GB.")
         check("max_extracted_gb", is_num(self.max_extracted_gb) and 0.1 <= self.max_extracted_gb <= 20000,
               "Maximum unpacked size must be between 0.1 and 20000 GB.")
+        check("trainer", self.trainer in ("auto", "gsplat", "vulkan"), "Unknown trainer.")
         check("log_level", self.log_level in ("critical", "error", "warning", "info", "debug"),
               "Unknown log level.")
         for name in ("require_token", "mdns", "start_server_on_launch", "run_in_background",
@@ -144,6 +147,8 @@ class AppSettings:
             args.append("--no-mdns")
         if self.advertise_ip:
             args += ["--advertise-ip", self.advertise_ip]
+        if self.trainer != "auto":
+            args += ["--trainer", self.trainer]
         return args
 
 

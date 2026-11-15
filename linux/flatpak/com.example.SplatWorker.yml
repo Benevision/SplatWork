@@ -1,4 +1,5 @@
-# SplatWork (GTK 4 + libadwaita, OpenGL viewer and studio) with the CUDA training server.
+# SplatWork (GTK 4 + libadwaita, OpenGL viewer and studio) with the training server (CUDA / gsplat, and the
+# Vulkan trainer for AMD and Intel GPUs).
 #
 #   ./build.sh          build and install for the current user
 #   ./make-bundle.sh    single-file SplatWorker-<version>-x86_64.flatpak for sharing
@@ -62,6 +63,22 @@ modules:
           - venv
           - .venv
 
+  # The Vulkan trainer (../vktrain, C++ and GLSL compute shaders, no PyTorch): trains on any GPU with a Vulkan
+  # 1.2 driver — the default trainer on AMD and Intel cards, opt-in on NVIDIA (splatworker/vktrain.py).
+  # glslangValidator and the Vulkan headers come from the SDK; the GPU drivers (Mesa RADV / ANV, NVIDIA's) from
+  # the runtime's GL extensions. Installs /app/bin/splatwork-vk-train.
+  - name: splatwork-vk-train
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DVKTRAIN_SELFTEST=OFF
+    sources:
+      - type: dir
+        path: ../vktrain
+        skip:
+          - build
+          - build-flatpak
+
   # The worker itself + the GUI. Installed as plain source under /app/share/splatworker/lib
   # (not into the Python 3.14 site-packages) so the GPU runtime's Python 3.10 can import it too.
   - name: splatworker
@@ -85,6 +102,7 @@ modules:
           - venv
           - .venv
           - tests
+          - vktrain
           - .pytest_cache
           - flatpak/.flatpak-builder
           - flatpak/.flatpak-pip-generator

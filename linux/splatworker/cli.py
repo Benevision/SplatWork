@@ -79,6 +79,7 @@ def cmd_serve(args) -> int:
         allow_local_datasets=bool(getattr(args, "allow_local_datasets", False)),
         # read once and removed, so jobs' subprocesses don't inherit it
         local_secret=os.environ.pop(LOCAL_SECRET_ENV, None) or None,
+        trainer=args.trainer,
     )
     if settings.allow_local_datasets and not settings.local_enabled:
         logging.getLogger("splatworker").info(
@@ -90,6 +91,11 @@ def cmd_serve(args) -> int:
     log.info("%s %s '%s' on %s:%d, data dir %s", PRODUCT_NAME, __version__, settings.name,
              settings.host, settings.port, settings.data_dir)
     app = create_app(settings)
+    try:
+        choice = app.state.manager.backend.trainer_choice()
+        log.info("trainer: %s (%s)", choice["trainer"] or "none", choice["reason"])
+    except Exception:  # noqa: BLE001
+        pass
     if os.environ.pop(STOP_ON_STDIN_EOF_ENV, None):
         _stop_when_stdin_closes()
     uvicorn.run(app, host=settings.host, port=settings.port, log_level=args.log_level,
@@ -121,6 +127,18 @@ def cmd_train(args) -> int:
     except ConfigError as e:
         print(f"invalid config: {e}", file=sys.stderr)
         return 2
+    if getattr(args, "trainer", "gsplat") != "gsplat":
+        from . import vktrain
+
+        choice = vktrain.select(args.trainer)
+        if choice["trainer"] is None:
+            print(f"no trainer: {choice['reason']}", file=sys.stderr)
+            return 1
+        if choice["trainer"] == "vulkan":
+            out = Path(args.out).expanduser()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            dev = args.device.split(":")[-1] if args.device != "cuda:0" else None
+            return vktrain.train_cli(args.dataset_dir, str(out), cfg_dict, device=dev)
 
     out = Path(args.out).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -192,7 +210,9 @@ def cmd_info(args) -> int:
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     from .gpu import adapters, backend_description, list_gpus, torch_backend, training_available
     from .processing import available_models, splatprep_available
+    from . import vktrain
 
+    choice = vktrain.select(os.environ.get("SPLATWORKER_TRAINER", "auto"))
     print(json.dumps({
         "workerVersion": __version__,
         "backend": backend_description(),
@@ -202,6 +222,8 @@ def cmd_info(args) -> int:
         "gpus": list_gpus(),
         "adapters": adapters(),
         "torchBackend": torch_backend(),
+        "trainer": vktrain.describe(choice),
+        "vulkanTrainer": {"binary": vktrain.binary_path(), **vktrain.device_info()},
     }, indent=1))
     return 0
 
@@ -287,6 +309,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-upload-gb", type=float, default=20.0)
     s.add_argument("--max-extracted-gb", type=float, default=40.0)
     s.add_argument("--log-level", default="info", choices=["critical", "error", "warning", "info", "debug"])
+    s.add_argument("--trainer", default=os.environ.get("SPLATWORKER_TRAINER", "auto"),
+                   choices=["auto", "gsplat", "vulkan"],
+                   help="auto: gsplat on NVIDIA, the Vulkan trainer (experimental) on other GPUs")
     s.add_argument("--allow-local-datasets", action="store_true",
                    help="enable the endpoints for SplatWork for Linux's desktop app on this PC (local folders as "
                         "datasets, queue order); it must also pass its per-launch secret in $" + LOCAL_SECRET_ENV)
@@ -299,7 +324,9 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--set", action="append", metavar="KEY=VALUE",
                    help="override a TrainingConfig key, e.g. --set strategy=adaptive")
     t.add_argument("--iterations", type=int)
-    t.add_argument("--device", default="cuda:0")
+    t.add_argument("--device", default="cuda:0", help="gsplat: cuda:N; vulkan: the Vulkan device index")
+    t.add_argument("--trainer", default="gsplat", choices=["auto", "gsplat", "vulkan"],
+                   help="gsplat (default here) or the Vulkan trainer (experimental); auto as the server picks")
     t.add_argument("--preview", action="store_true", help="also write <out>.preview.ply snapshots")
     t.set_defaults(func=cmd_train)
 

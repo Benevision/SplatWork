@@ -405,3 +405,54 @@ def test_pause_resume_with_features(build_dir, feature_dataset, tmp_path):
     # a state saved with other features does not load
     rc, bad = run(build_dir, ds, tmp_path, {**cfg, "poseRefinement": False}, "--resume", str(snap), name="bad")
     assert rc == 1 and "features" in of(bad, "error")[0]["message"]
+
+
+# ----------------------------------------------------------- through the worker
+
+def test_worker_job_pause_resume_and_info(build_dir, dataset, tmp_path, monkeypatch):
+    """splatworker.vktrain as the server runs it: --info, the trainer choice, a job paused on request and resumed
+    from resume.vkstate, the result and the done stats."""
+    import queue
+    import threading
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from splatworker import vktrain
+
+    monkeypatch.setenv(vktrain.BINARY_ENV, str(build_dir / "splatwork-vk-train"))
+    monkeypatch.setenv(vktrain.ALLOW_CPU_ENV, "1")         # lavapipe is a CPU driver
+    vktrain._info_cache.clear()
+    info = vktrain.device_info()
+    assert info["ok"] and info["interface"] == vktrain.INTERFACE and info["deviceType"] in (
+        "cpu", "discrete", "integrated", "virtual", "other")
+    assert vktrain.select("vulkan")["trainer"] == "vulkan"
+
+    job = tmp_path / "job"
+    job.mkdir()
+    cfg = {**BASE, "iterations": 300, "previewInterval": 100, "evalInterval": 100}
+
+    def run_job(pause_at=None):
+        q = queue.Queue()
+        cancel, pause, ckpt = threading.Event(), threading.Event(), threading.Event()
+        t = threading.Thread(target=vktrain.subprocess_entry,
+                             args=(str(dataset), cfg, str(job), None, q, cancel, pause, ckpt))
+        t.start()
+        msgs = []
+        while True:
+            kind, payload = q.get(timeout=600)
+            msgs.append((kind, payload))
+            if pause_at and kind == "status" and (payload.get("step") or 0) >= pause_at:
+                pause.set()
+            if kind in ("done", "paused", "cancelled", "error"):
+                t.join(30)
+                return msgs, (kind, payload)
+
+    msgs, out = run_job(pause_at=120)
+    assert out[0] == "paused", msgs[-5:]
+    assert (job / "resume.vkstate").is_file() and (job / "checkpoint.ply").is_file()
+    assert any(k == "preview" for k, _ in msgs) and (job / "preview.splat").is_file()
+    msgs, out = run_job()
+    assert out[0] == "done", msgs[-5:]
+    stats = out[1]
+    assert stats["trainer"] == "vulkan" and stats["numGaussians"] > 0 and stats["steps"] < 300
+    assert stats["psnr"] > 15
+    assert (job / "result.ply").is_file() and not (job / "resume.vkstate").exists()

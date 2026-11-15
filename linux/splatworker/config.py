@@ -338,6 +338,8 @@ class ServerSettings:
     # in the server's environment, sent as the X-SplatWork-Local header); loopback alone is not enough.
     allow_local_datasets: bool = False
     local_secret: Optional[str] = None
+    # which trainer trains: "auto" (gsplat on NVIDIA, else the Vulkan trainer), "gsplat", "vulkan" (vktrain.py)
+    trainer: str = "auto"
 
     @property
     def local_enabled(self) -> bool:

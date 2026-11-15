@@ -73,11 +73,22 @@ Context::Context(const ContextOptions& opt) {
     if (devs.empty()) throw Error("no Vulkan device found");
     int pick = opt.deviceIndex;
     if (pick < 0) {
+        // discrete before integrated before virtual before CPU (lavapipe) — first of the best kind
+        auto rank = [](VkPhysicalDeviceType t) {
+            switch (t) {
+                case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return 0;
+                case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 1;
+                case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return 2;
+                case VK_PHYSICAL_DEVICE_TYPE_CPU: return 4;
+                default: return 3;
+            }
+        };
         pick = 0;
+        int best = 99;
         for (size_t i = 0; i < devs.size(); i++) {
             VkPhysicalDeviceProperties p;
             vkGetPhysicalDeviceProperties(devs[i], &p);
-            if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) { pick = int(i); break; }
+            if (rank(p.deviceType) < best) { best = rank(p.deviceType); pick = int(i); }
         }
     }
     if (pick >= int(devs.size())) throw Error("Vulkan device index out of range");
@@ -98,6 +109,20 @@ Context::Context(const ContextOptions& opt) {
     info.name = props.properties.deviceName;
     info.driver = std::string(drv.driverName) + " " + drv.driverInfo;
     info.vendorID = props.properties.vendorID;
+    switch (props.properties.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: info.deviceType = "discrete"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: info.deviceType = "integrated"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: info.deviceType = "virtual"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU: info.deviceType = "cpu"; break;
+        default: info.deviceType = "other";
+    }
+    {
+        VkPhysicalDeviceMemoryProperties mp;
+        vkGetPhysicalDeviceMemoryProperties(phys_, &mp);
+        for (uint32_t h = 0; h < mp.memoryHeapCount; h++)
+            if (mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                info.deviceLocalBytes = std::max<uint64_t>(info.deviceLocalBytes, mp.memoryHeaps[h].size);
+    }
     info.deviceID = props.properties.deviceID;
     info.apiVersion = props.properties.apiVersion;
     info.subgroupSize = sub.subgroupSize;

@@ -10,7 +10,8 @@ Layout under ``data_dir``::
     jobs/<jobId>/preview.ply              full snapshot (only written by test/fake backends)
     jobs/<jobId>/result.ply               final splat (train)
     jobs/<jobId>/checkpoint.ply           on-demand / pause-time snapshot of the splats (train, capability "pause")
-    jobs/<jobId>/resume.pt                full trainer state of a paused train job (removed when the job ends)
+    jobs/<jobId>/resume.pt                full trainer state of a paused train job (removed when the job ends);
+                                          resume.vkstate from the Vulkan trainer
     jobs/<jobId>/output.zip               output of a processing job
     tmp/                                  in-flight uploads
 """
@@ -59,6 +60,16 @@ STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "
                "pausedAt", "stage", "stageProgress", "stages", "trainJobId", "parentJobId")
 REMOTE_PAUSE_LIMIT = 3600.0         # another computer's paused job resumes by itself after this (s)
 LOCAL_PAUSE_LIMIT = 14 * 86400.0    # a paused job of this PC's app is cancelled (resume.pt freed) after this
+RESUME_FILES = ("resume.pt", "resume.vkstate")   # paused train job's saved state: CUDA trainer, Vulkan trainer
+
+
+def _has_resume(job_dir: Path) -> bool:
+    return any((job_dir / n).is_file() for n in RESUME_FILES)
+
+
+def _drop_resume(job_dir: Path) -> None:
+    for n in RESUME_FILES:
+        (job_dir / n).unlink(missing_ok=True)
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 LOCAL_HEADER = "X-SplatWork-Local"   # per-launch secret of the desktop app that started this server
 
@@ -209,7 +220,7 @@ class JobManager:
                 continue
             if job.spec.get("kind") == "pipeline":
                 pass       # a whole-pipeline job continues after the restart (start() restarts its runner)
-            elif job.state in ACTIVE_STATES and (d / "resume.pt").is_file():
+            elif job.state in ACTIVE_STATES and _has_resume(d):
                 # a resumed job that was running when the worker stopped: its last pause is still on disk
                 job.status["state"] = "paused"
                 job.status["message"] = "interrupted by a worker restart; resume continues from the last pause"
@@ -410,7 +421,7 @@ class JobManager:
                 return job
             if job.state == "paused":
                 job.update(persist=True, state="cancelled", message="cancelled while paused", etaSeconds=None)
-                (job.dir / "resume.pt").unlink(missing_ok=True)
+                _drop_resume(job.dir)
                 job.log("cancelled while paused")
                 return job
         if job.state in ACTIVE_STATES:
@@ -580,14 +591,14 @@ class JobManager:
             elif job.status.get("origin") == "local" and age >= LOCAL_PAUSE_LIMIT:
                 job.update(persist=True, state="cancelled", message="cancelled: paused for more than 14 days",
                            etaSeconds=None)
-                (job.dir / "resume.pt").unlink(missing_ok=True)
+                _drop_resume(job.dir)
                 job.log("cancelled after 14 days paused; its saved state was removed")
 
     def _requeue_paused_locked(self, job: Job, why: str) -> None:
         job.pause_event.clear()
         job.checkpoint_event.clear()
         step = job.status.get("step") or 0
-        resumable = (job.dir / "resume.pt").is_file()
+        resumable = _has_resume(job.dir)
         job.update(persist=True, state="queued", pausedAt=None,
                    message=f"queued (continues from step {step:,})" if resumable else "queued")
         job.log(why + (f", continues from step {step}" if resumable else ""))
@@ -616,7 +627,7 @@ class JobManager:
         if device is not None:
             gpus = list_gpus([device])
             gpu_name = gpus[0]["name"] if gpus else f"GPU {device}"
-        resuming = job.spec.get("kind") == "train" and (job.dir / "resume.pt").is_file()
+        resuming = job.spec.get("kind") == "train" and _has_resume(job.dir)
         prior = float(job.status.get("elapsedSeconds") or 0.0) if resuming else 0.0
         job.started_monotonic = time.monotonic() - prior     # elapsed time carries on across a pause
         job.update(persist=True, state="loading", message="resuming" if resuming else "starting", gpu=gpu_name)
@@ -673,7 +684,7 @@ class JobManager:
             job.log(f"paused at step {e.step}; the GPU is free (resume continues from here)")
             return
         except JobCancelled:
-            if self.stopping and not job.deleted and (job.dir / "resume.pt").is_file():
+            if self.stopping and not job.deleted and _has_resume(job.dir):
                 # stopped before it could save again: its last pause is still on disk, keep it resumable
                 job.update(persist=True, state="paused", pausedAt=time.time(), etaSeconds=None,
                            message="interrupted by a worker stop; resume continues from the last pause")
@@ -723,7 +734,7 @@ class JobManager:
         job.update(persist=True, state=state, message=message, etaSeconds=0.0 if state == "completed" else None,
                    elapsedSeconds=elapsed)
         job.pause_event.clear()
-        (job.dir / "resume.pt").unlink(missing_ok=True)      # only a paused job needs its saved state
+        _drop_resume(job.dir)      # only a paused job needs its saved state
         job.log(f"job {state}: {message}")
 
 
@@ -864,10 +875,11 @@ def _ingest_dataset(settings: ServerSettings, zip_path: Path, dataset_id: str) -
 
 def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                devices: Optional[List[Optional[int]]] = None) -> FastAPI:
+    from . import vktrain
     from .gpu import adapters as gpu_adapters
     from .gpu import backend_description, list_gpus
 
-    backend = backend or SubprocessBackend()
+    backend = backend or SubprocessBackend(trainer=settings.trainer)
     for d in (settings.datasets_dir, settings.jobs_dir, settings.tmp_dir):
         d.mkdir(parents=True, exist_ok=True)
     try:
@@ -964,6 +976,15 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             caps = backend.capabilities()
         except Exception:
             caps = []
+        try:
+            choice = backend.trainer_choice()
+        except Exception as e:  # noqa: BLE001
+            choice = {"trainer": None, "reason": str(e)}
+        trainer_info = vktrain.describe(choice)
+        if choice.get("trainer") == "vulkan" and not gpus:
+            entry = vktrain.gpu_entry()      # AMD / Intel without a PyTorch GPU runtime: the Vulkan device
+            if entry is not None:
+                gpus = [entry]
         if "process" in caps or "frames" in caps:
             caps = caps + ["chain"]       # outputDatasetId, /v1/datasets/compose, /v1/datasets/{id}/archive.zip
             caps = caps + ["stream"]      # ≥ 1.3.13: training images streamed from disk when RAM is short
@@ -974,7 +995,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             if homevideo_available():
                 caps = caps + ["homevideo"]   # ≥ 1.6.0: frames request "vhs" (old tape restoration, clips), sfm "cameraGroups"
         caps = caps + ["priority"]        # ≥ 1.4.0: POST /v1/jobs/{id}/prioritize, JobStatus.priority / origin
-        if "train" in caps:
+        if "train" in caps and backend.census_available():
             caps = caps + ["census"]      # ≥ 1.4.0: POST /v1/census (Auto clean)
         if "train" in caps and getattr(backend, "pausable", False):
             caps = caps + ["pause"]       # ≥ 1.4.0: POST /v1/jobs/{id}/pause|resume|checkpoint, checkpoint.ply
@@ -994,7 +1015,10 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             # ≥ 1.6.0: every graphics card of any vendor (sysfs), also ones jobs can't use (AMD / Intel without a
             # GPU runtime, integrated GPUs): {vendor, name, pci, driver, integrated, memoryMB?, freeMemoryMB?}
             "adapters": gpu_adapters(),
-            "backend": backend_description(),
+            "backend": (f"SplatWork Vulkan trainer (experimental) on {trainer_info.get('device', 'GPU')}"
+                        if choice.get("trainer") == "vulkan" else backend_description()),
+            # ≥ 1.7.0: which trainer trains — {kind: "gsplat" | "vulkan" | null, experimental, reason, device?, …}
+            "trainer": trainer_info,
             "busy": manager.busy(),
             "queueLength": manager.queue_length(),
             "capabilities": caps,

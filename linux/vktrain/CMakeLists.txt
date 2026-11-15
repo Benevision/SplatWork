@@ -19,7 +19,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 find_package(Vulkan REQUIRED)
-find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
+find_program(GLSLANG_VALIDATOR NAMES glslangValidator glslang REQUIRED)
 
 set(KERNELS preprocess preprocess_bwd radix_hist radix_scatter scan_block scan_add gather_counts duplicate_keys
             tile_ranges raster_fwd raster_bwd ssim_prep blur ssim_terms loss_grad adam atomic_probe
@@ -93,11 +93,20 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vktrain_core PRIVATE -Wall -Wextra)
 endif()
 
+# The worker (splatworker/vktrain.py) checks this before it uses the program: bump it when the command line,
+# the JSON lines or the job-dir files change in a way an older worker can't read.
+set(VKTRAIN_INTERFACE 1)
 add_executable(splatwork-vk-train src/main.cpp)
 target_link_libraries(splatwork-vk-train PRIVATE vktrain_core)
+target_compile_definitions(splatwork-vk-train PRIVATE VKTRAIN_INTERFACE=${VKTRAIN_INTERFACE})
 
-add_executable(vktrain-selftest src/selftest.cpp)
-target_link_libraries(vktrain-selftest PRIVATE vktrain_core)
+include(GNUInstallDirs)
+install(TARGETS splatwork-vk-train RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-enable_testing()
-add_test(NAME vktrain-selftest COMMAND vktrain-selftest)
+option(VKTRAIN_SELFTEST "build vktrain-selftest (kernels against the CPU reference)" ON)
+if(VKTRAIN_SELFTEST)
+  add_executable(vktrain-selftest src/selftest.cpp)
+  target_link_libraries(vktrain-selftest PRIVATE vktrain_core)
+  enable_testing()
+  add_test(NAME vktrain-selftest COMMAND vktrain-selftest)
+endif()

@@ -282,6 +282,10 @@ def processing_profile_for(driver: DriverInfo) -> Optional[ProcessingGpuProfile]
 
 # ------------------------------------------------------------- choosing
 
+VULKAN_WARNING = ("The Vulkan trainer is new: it hasn't been compared with the NVIDIA (gsplat) trainer on real GPUs "
+                  "yet, so results and speed may differ. It is part of the app; nothing extra is downloaded for it. "
+                  "Settings → Training → Trainer switches it off.")
+
 @dataclass
 class ProfileChoice:
     profile_id: str                  # a GpuProfile id, or "cpu"
@@ -333,10 +337,19 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None,
             else:
                 warnings.append("PyTorch for Intel GPUs needs a recent kernel (6.8 or newer) with the i915 or xe "
                                 "driver; if it can't use the card, processing runs on the CPU.")
+            if driver.vulkan_trains:
+                warnings.insert(0, VULKAN_WARNING)
+                return ProfileChoice(proc.id, True,
+                                     f"{other.name} trains with SplatWork's Vulkan trainer (experimental), and the "
+                                     "processing runtime prepares datasets on it.", warnings)
             return ProfileChoice(proc.id, False,
                                  f"Processing runtime for {other.name}: dataset processing uses the GPU; "
                                  "training isn't available on this GPU yet.", warnings,
                                  blocking=problem[1] if problem else None)
+        if other is not None and driver.vulkan_trains:
+            return ProfileChoice(CPU_PROFILE_ID, True,
+                                 f"{other.name} trains with SplatWork's Vulkan trainer (experimental); dataset "
+                                 "processing runs on the CPU.", [VULKAN_WARNING])
         if other is not None:
             summary = (f"Processing-only runtime: training isn't available on {other.name} yet, so processing "
                        "runs on the CPU.")

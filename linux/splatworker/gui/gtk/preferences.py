@@ -13,6 +13,8 @@ from ..paths import in_flatpak
 from .common import action_row, alert, run_in_thread
 
 LOG_LEVELS = ["critical", "error", "warning", "info", "debug"]
+TRAINERS = [("auto", "Automatic"), ("gsplat", "gsplat (NVIDIA)"),
+            ("vulkan", "Vulkan (experimental)")]
 
 
 class Preferences:
@@ -34,7 +36,7 @@ class Preferences:
         else:  # pragma: no cover - libadwaita 1.4
             self.dialog = Adw.PreferencesWindow(title="Settings", transient_for=window, modal=True)
         page = Adw.PreferencesPage(title="Settings", icon_name="emblem-system-symbolic")
-        for grp in (self._network(), self._storage(), self._gpus_group(), self._startup(),
+        for grp in (self._network(), self._storage(), self._gpus_group(), self._trainer(), self._startup(),
                     self._runtime(), self._advanced()):
             page.add(grp)
         self.dialog.add(page)
@@ -181,7 +183,12 @@ class Preferences:
                     self._gpu_rows.append(row)
                     g.add(row)
                 if not info.gpus:
-                    g.add(action_row("No NVIDIA GPU detected.", icon="dialog-warning-symbolic"))
+                    other = info.other_gpu
+                    g.add(action_row(f"{other.name}: trains with the Vulkan trainer" if other is not None
+                                     else "No NVIDIA GPU detected.",
+                                     "One job at a time on this card." if other is not None else "",
+                                     icon="dialog-information-symbolic" if other is not None
+                                     else "dialog-warning-symbolic"))
         run_in_thread(detect, done)
         return g
 
@@ -197,6 +204,20 @@ class Preferences:
             self._toast("Select at least one GPU.")
             return
         self._set("gpus", chosen or None)
+
+    def _trainer(self) -> Adw.PreferencesGroup:
+        g = Adw.PreferencesGroup(title="Training")
+        keys = [k for k, _ in TRAINERS]
+        combo = Adw.ComboRow(title="Trainer",
+                             subtitle="Automatic uses gsplat on NVIDIA cards and the built-in Vulkan trainer on AMD "
+                                      "and Intel cards. The Vulkan trainer needs no GPU runtime download, but it is "
+                                      "new: it hasn't been checked against gsplat on real GPUs yet. The server "
+                                      "restarts when you change this.",
+                             model=Gtk.StringList.new([label for _, label in TRAINERS]))
+        combo.set_selected(keys.index(self.s.trainer) if self.s.trainer in keys else 0)
+        combo.connect("notify::selected", lambda r, _p: self._set("trainer", keys[r.get_selected()]))
+        g.add(combo)
+        return g
 
     def _startup(self) -> Adw.PreferencesGroup:
         g = Adw.PreferencesGroup(title="Startup and background")

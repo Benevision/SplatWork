@@ -81,6 +81,16 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.0" date="2026-11-15">
+      <description>
+        <p>Experimental training on AMD and Intel graphics cards.</p>
+        <ul>
+          <li>A new built-in Vulkan trainer trains on AMD and Intel cards without downloading PyTorch or CUDA. NVIDIA cards keep the gsplat trainer; the Vulkan trainer can be chosen in Settings.</li>
+          <li>It supports the same training settings as the NVIDIA trainer, including skybox, colour correction, depth and normal losses, pause and resume.</li>
+          <li>Experimental: it has not yet been compared with the NVIDIA trainer on real graphics cards.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.6.0" date="2026-11-13">
       <description>
         <p>AMD and Intel graphics cards are recognised, and a whole project can run on this computer as one job.</p>

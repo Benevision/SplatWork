@@ -56,6 +56,12 @@ class JobContext:
 class Backend:
     pausable = False   # train jobs honour JobContext.pause_event / checkpoint_event
 
+    def census_available(self) -> bool:
+        return True
+
+    def trainer_choice(self) -> Dict[str, Any]:
+        return {"trainer": "gsplat", "reason": "default"}
+
     def capabilities(self) -> List[str]:
         raise NotImplementedError
 
@@ -70,16 +76,34 @@ class Backend:
 class SubprocessBackend(Backend):
     pausable = True
 
-    def __init__(self, cancel_grace_seconds: float = 30.0):
+    def __init__(self, cancel_grace_seconds: float = 30.0, trainer: str = "auto"):
         self.cancel_grace = cancel_grace_seconds
         self._mp = mp.get_context("spawn")
+        self.trainer_setting = trainer
+        self._trainer_choice: Optional[Dict[str, Any]] = None
+        self._choice_lock = threading.Lock()
+
+    def trainer_choice(self) -> Dict[str, Any]:
+        """{"trainer": "gsplat" | "vulkan" | None, "reason"} — chosen once (the Vulkan probe starts the GPU)."""
+        with self._choice_lock:
+            if self._trainer_choice is None:
+                from .vktrain import select
+
+                self._trainer_choice = select(self.trainer_setting)
+            return self._trainer_choice
+
+    def census_available(self) -> bool:
+        """Auto clean renders with gsplat, so it needs gsplat even when the Vulkan trainer trains."""
+        from .gpu import training_available
+
+        return training_available()
 
     def capabilities(self) -> List[str]:
-        from .gpu import training_available
         from .processing import frames_available, splatprep_available
 
         caps = []
-        if training_available():
+        trainer = self.trainer_choice()["trainer"]
+        if trainer is not None:
             caps.append("train")
         if splatprep_available():
             caps.append("process")
@@ -97,7 +121,11 @@ class SubprocessBackend(Backend):
         cancel = self._mp.Event()
         pause = self._mp.Event()
         ckpt = self._mp.Event()
-        if ctx.kind == "train":
+        if ctx.kind == "train" and self.trainer_choice()["trainer"] == "vulkan":
+            from .vktrain import subprocess_entry
+
+            args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), ctx.device_index, q, cancel, pause, ckpt)
+        elif ctx.kind == "train":
             from .trainer import subprocess_entry
 
             device = f"cuda:{ctx.device_index}" if ctx.device_index is not None else "cuda:0"

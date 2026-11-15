@@ -6,6 +6,20 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.0 — training on AMD and Intel graphics cards (experimental):** a new Vulkan trainer is
+  built into the app. It needs no PyTorch or CUDA download and runs on any GPU with a Vulkan driver.
+  - On AMD and Intel cards it trains by default; NVIDIA cards keep the gsplat (CUDA) trainer, and the Vulkan one can
+    be chosen in *Settings → Training → Trainer*.
+  - It reads the same training settings as the CUDA trainer: both densification strategies, skybox, appearance
+    correction and bilateral grid, depth and normal losses, moving-object masking, pose refinement, the compact
+    optimizer, previews, checkpoints and pause / resume. Depth priors are predicted with PyTorch when the processing
+    runtime is installed.
+  - The setup assistant says the card trains with the Vulkan trainer, and the Mac sees the card and the trainer
+    (`/v1/info` "trainer").
+  - Not yet run on a real GPU: it has only been checked against gsplat on Mesa's software Vulkan driver. Quality and
+    speed on real cards are still to be measured (`linux/vktrain/compare_training.sh`). Densification still copies
+    the splats to the CPU and back, and Auto clean still needs gsplat.
+
 - **Drone surveys no longer fold or double the scene:** photos with GPS are now matched with their GPS
   neighbours (DJI's numbered file names made them look like video, so neighbouring flight lines were only linked
   by look-alike guesses — identical sheds matched to each other). If the solve still disagrees with GPS, it is

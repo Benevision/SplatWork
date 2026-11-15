@@ -3,7 +3,7 @@
 Runs in the GPU runtime (``flatpak run com.example.SplatWorker --headless gpu-check``) and checks, each step on its
 own so one failure doesn't hide the rest:
 
-1. the cards the kernel sees (sysfs), /dev/kfd, the HSA override the app sets;
+1. the cards the kernel sees (sysfs), /dev/kfd, the Vulkan trainer's device, the HSA override the app sets;
 2. PyTorch: version, CUDA / ROCm (HIP) / XPU build, the devices and (ROCm) their gfx ISA;
 3. small GPU workloads: 1 GB allocation, a 4096² matmul (TFLOPS), a convolution, a softmax — with timings;
 4. gsplat (if installed): import, a forward + backward rasterization of 100 k splats, timed; fused-ssim;
@@ -51,6 +51,16 @@ def run(train_check: bool = True, splats: int = 100_000) -> Dict[str, Any]:
     lines: List[str] = ["SplatWork GPU check", "System:"]
     _step(report, "adapters", lambda: adapters(), lines)
     _step(report, "kfd", lambda: os.path.exists("/dev/kfd"), lines)
+    def vulkan_trainer():
+        from . import vktrain
+
+        info = vktrain.device_info()
+        why = vktrain.usable(info)
+        if why:
+            raise RuntimeError(why)
+        return {k: info.get(k) for k in ("device", "driver", "deviceType", "memoryMB", "subgroupSize",
+                                          "nativeAtomics")}
+    _step(report, "vulkan_trainer", vulkan_trainer, lines)
     _step(report, "env", lambda: {k: os.environ.get(k) for k in
                                   ("HSA_OVERRIDE_GFX_VERSION", "HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES",
                                    "ROCR_VISIBLE_DEVICES", "SPLATWORK_NO_HSA_OVERRIDE") if os.environ.get(k)},
@@ -178,5 +188,5 @@ def main(args) -> int:
             v.pop("trace", None) if v.get("ok") else None
     print("SPLATWORK-GPU-CHECK " + json.dumps(slim, default=str), flush=True)
     failed = [k for k, v in slim.items() if isinstance(v, dict) and v.get("ok") is False
-              and k not in ("gsplat", "fused_ssim", "splatprep")]
+              and k not in ("gsplat", "fused_ssim", "splatprep", "vulkan_trainer")]
     return 1 if failed else 0

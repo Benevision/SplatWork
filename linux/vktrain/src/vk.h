@@ -27,6 +27,8 @@ struct DeviceInfo {
     std::string name;
     std::string driver;
     uint32_t vendorID = 0, deviceID = 0, apiVersion = 0;
+    std::string deviceType;           // "discrete" | "integrated" | "virtual" | "cpu" | "other"
+    uint64_t deviceLocalBytes = 0;    // largest device-local memory heap
     uint32_t subgroupSize = 0;
     bool subgroupOk = false;          // basic + vote + arithmetic in compute shaders
     bool floatAtomicAdd = false;      // shaderBufferFloat32AtomicAdd (VK_EXT_shader_atomic_float)
@@ -36,7 +38,7 @@ struct DeviceInfo {
 };
 
 struct ContextOptions {
-    int deviceIndex = -1;             // -1: first discrete GPU, else first device
+    int deviceIndex = -1;             // -1: first discrete GPU, else integrated, virtual, then CPU devices
     enum class Atomics { Auto, Native, Cas } atomics = Atomics::Auto;
 };
 

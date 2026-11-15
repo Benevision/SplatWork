@@ -323,7 +323,7 @@ pixel that raster_bwd adds to the background term (sky colour, sky penalty, the 
   + pose + compact follows the uninterrupted one within 5e-5 (relative loss, 70 steps). The whole file takes ~11 min
   on the aarch64 colima VM (16 tests; the 2b ones ~8 min). Lavapipe there advertises float atomic add but loses
   updates; the start-up probe catches it almost always, but a run that slips through trains with wrong sums (seen
-  once in a resume comparison) — `--atomics cas` would pin it if that becomes a CI problem.
+  once in a resume comparison). Since then the probe runs six rounds and any wrong sum selects the CAS kernels.
 - **Deviations from trainer.py**: the median error comes from a 2048-bin histogram of every pixel (trainer.py:
   the median of 65 536 random pixels); photos with an alpha channel are composited over black when the skybox is on
   (trainer.py: over the sky, with a gradient through the target); the sky's viewing directions use the corrected
@@ -334,6 +334,43 @@ pixel that raster_bwd adds to the background term (sky colour, sky penalty, the 
   `features`).
 - **Not done in 2b**: GPU densification (the host round trip of 2a remains; with compact Adam the carriers are as
   large as fp32 moments on the host side, the GPU side is compact), the disk-streaming mode, real-GPU numbers.
+
+### Stage 3 status (1.7.0: the trainer in the app)
+
+- **Choice** (`splatworker/vktrain.py`): `serve --trainer auto|gsplat|vulkan` (env `SPLATWORKER_TRAINER`; the app's
+  *Settings → Training → Trainer*, `AppSettings.trainer`). `auto`: gsplat when an NVIDIA card is present (sysfs or
+  NVML / torch — unchanged for NVIDIA, with or without the CUDA runtime); otherwise the Vulkan trainer when
+  `splatwork-vk-train --info` finds a GPU (a CPU driver such as lavapipe doesn't count, except with
+  `SPLATWORK_VK_ALLOW_CPU=1` in tests); otherwise gsplat if installed (the old ROCm spike runtime). Chosen once per
+  server start; logged as `trainer: …`.
+- **Program interface**: `--info` is one JSON line with `deviceType`, `memoryMB` and `interface` (1;
+  `VKTRAIN_INTERFACE` in CMakeLists.txt — the worker refuses a different one). With no `--device` the program now
+  picks discrete > integrated > virtual > CPU (it used to fall back to device 0, which can be lavapipe).
+- **Jobs**: `vktrain.subprocess_entry` runs in the same spawned job process as the CUDA trainer, writes the config
+  to `vk-config.json`, starts the program with `--job-dir` (and `--resume resume.vkstate` when the job was paused)
+  and turns its JSON lines into the same queue messages; pause / checkpoint / cancel go to its stdin. The server
+  treats `resume.vkstate` like `resume.pt` (`RESUME_FILES`). `done` stats carry `"trainer": "vulkan"`.
+- **Depth priors**: when PyTorch + `transformers` are installed (the AMD / Intel processing runtime has them), the
+  job process fills `depth-prior/` with Depth Anything first (on ROCm / XPU / CPU), as trainer.py does; the program
+  reads that cache.
+- **`/v1/info`**: `"trainer": {kind, experimental, reason, device, driver, deviceType, memoryMB, …}`; `"backend"`
+  says "SplatWork Vulkan trainer (experimental) on <device>"; when PyTorch lists no GPU the Vulkan device is the
+  `"gpus"` entry (vendor from its PCI id, memory / free memory from sysfs), so the Mac sizes and schedules jobs.
+  `census` (Auto clean) is advertised only where gsplat is installed: it renders with gsplat.
+- **CLI**: `splatworker train --trainer vulkan …`; `info` adds `trainer` and `vulkanTrainer`; `gpu-check` adds a
+  `vulkan_trainer` step.
+- **Setup**: `DriverInfo.vulkan` (the probe, run by `detect()` when there is no usable NVIDIA GPU); on AMD / Intel
+  the assistant says the card trains with the Vulkan trainer (experimental) instead of "training needs NVIDIA", and
+  still installs the processing runtime (ROCm / XPU / CPU) for dataset preparation.
+- **Flatpak**: module `splatwork-vk-train` (cmake-ninja, `-DVKTRAIN_SELFTEST=OFF`) installs
+  `/app/bin/splatwork-vk-train`; glslang and the Vulkan headers from the GNOME SDK; drivers (RADV, ANV, NVIDIA) from
+  the runtime's GL extensions; `--device=all` already exposes `/dev/dri`.
+- **Tests**: `tests/test_vktrain_worker.py` (choice rules, the job runner against a fake program, backend,
+  `/v1/info`, settings, setup wording; no Vulkan needed) and `test_worker_job_pause_resume_and_info` in
+  `test_vktrain.py` (the real program through the worker on lavapipe: pause on request, resume, result).
+- **Still open**: real-GPU numbers (the 4080 comparison and the RX 6700 XT run, stage 4); GPU densification; the
+  disk-streaming mode (photos stay in RAM as 8-bit, like the CUDA trainer's in-memory mode); Auto clean without
+  gsplat; Windows (the program isn't built there yet).
 
 ### Stages (each checked in with the user)
 
