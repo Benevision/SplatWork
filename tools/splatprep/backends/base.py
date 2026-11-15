@@ -376,10 +376,11 @@ def _hold_to_gps(rec, info, db_path, ctx, gps_enu):
         return rec, info
     ctx.progress.message("mapping", f"{first['badFraction']:.0%} of cameras are far from their GPS position "
                                     f"(median {first['medianM']} m) — solving again held to GPS")
-    write_position_priors(db_path, {n: gps_enu[i] for i, n in enumerate(ctx.names)})
+    positions = {n: gps_enu[i] for i, n in enumerate(ctx.names)}
+    write_position_priors(db_path, positions)
     try:
         rec2 = run_gps_prior_mapper(db_path, ctx.image_dir, ctx.work_dir / "sparse_gps", ctx.log_path,
-                                    ctx.progress.sub("mapping"), len(ctx.names))
+                                    ctx.progress.sub("mapping"), len(ctx.names), positions)
     except Exception as e:  # noqa: BLE001 — keep the first solve; the GPS check will flag it
         ctx.progress.message("mapping", f"GPS-held mapping failed: {e}")
         return rec, info

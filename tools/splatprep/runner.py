@@ -24,6 +24,8 @@ Extra (optional) request keys understood here, beyond §6:
 
 from __future__ import annotations
 
+import json
+
 import shutil
 import time
 from pathlib import Path
@@ -243,6 +245,9 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         masks_dir=_resolve(workdir, req.get("masksDir")),
     )
     stats.update({"export": exp, "status": "ok"})
+    if "gpsCheck" in stats:   # for callers that only see the output folder (a worker's whole-pipeline job)
+        (out_dir / "gps_check.json").write_text(json.dumps({k: v for k, v in stats["gpsCheck"].items()
+                                                            if k not in ("outliers", "worst")}, indent=1))
     if not req.get("keepWork", False):
         shutil.rmtree(work, ignore_errors=True)
     return stats

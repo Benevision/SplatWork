@@ -325,10 +325,28 @@ def _run_single(
 MIN_SPREAD_M = 2.0
 
 
-def gps_prior_mapper_available() -> bool:
-    """COLMAP with ``pose_prior_mapper`` (incremental mapping held to prior camera positions)."""
+def _cli_pose_prior_mapper() -> Optional[str]:
     colmap = find_executable("colmap")
-    return bool(colmap and "pose_prior_mapper" in colmap_commands(colmap))
+    return colmap if colmap and "pose_prior_mapper" in colmap_commands(colmap) else None
+
+
+@functools.lru_cache(maxsize=1)
+def _pycolmap_prior_mapping() -> bool:
+    """pycolmap whose incremental mapper can hold cameras to prior positions (COLMAP 3.10+ / 4)."""
+    import subprocess
+
+    try:
+        r = subprocess.run([sys.executable, "-c", "import pycolmap; o = pycolmap.IncrementalPipelineOptions(); "
+                            "o.use_prior_position = True; print('ok')"], capture_output=True, text=True, timeout=60)
+        return r.returncode == 0 and "ok" in r.stdout
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def gps_prior_mapper_available() -> bool:
+    """Incremental mapping held to prior camera positions: COLMAP's ``pose_prior_mapper`` or pycolmap's mapper
+    with ``use_prior_position`` (SplatWork for Linux / Windows workers have pycolmap but no COLMAP CLI)."""
+    return bool(_cli_pose_prior_mapper()) or _pycolmap_prior_mapping()
 
 
 def write_position_priors(database: Path, positions: Dict[str, Sequence[float]], std_h: float = 3.0,
@@ -369,13 +387,14 @@ def write_position_priors(database: Path, positions: Dict[str, Sequence[float]],
 
 
 def run_gps_prior_mapper(database: Path, image_dir: Path, out_dir: Path, log_path: Optional[Path] = None,
-                         progress: Optional[Callable[[float, str], None]] = None, num_images: int = 0) -> Reconstruction:
+                         progress: Optional[Callable[[float, str], None]] = None, num_images: int = 0,
+                         positions: Optional[Dict[str, Sequence[float]]] = None) -> Reconstruction:
     """Incremental mapping held to the priors written by :func:`write_position_priors` (robust loss, so a few
-    bad GPS fixes don't pull the solve). Slower than the global mapper, but it can't fold or double a survey."""
+    bad GPS fixes don't pull the solve). Slower than the global mapper, but it can't fold or double a survey.
+    Uses COLMAP's ``pose_prior_mapper`` when the CLI has it, else pycolmap with ``use_prior_position``."""
     progress = progress or (lambda f, m="": None)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    colmap = find_executable("colmap")
     registered = [0]
 
     def on_line(line: str):
@@ -384,30 +403,58 @@ def run_gps_prior_mapper(database: Path, image_dir: Path, out_dir: Path, log_pat
             if num_images:
                 progress(min(0.95, registered[0] / num_images), f"registered {registered[0]}/{num_images} (held to GPS)")
 
-    progress(0.02, "incremental mapping held to GPS positions (COLMAP)")
-    run_logged([colmap, "pose_prior_mapper", "--database_path", database, "--image_path", image_dir,
-                "--output_path", out_dir, "--use_robust_loss_on_prior_position", "1"], log_path, on_line)
+    colmap = _cli_pose_prior_mapper()
+    if colmap:
+        progress(0.02, "incremental mapping held to GPS positions (COLMAP)")
+        run_logged([colmap, "pose_prior_mapper", "--database_path", database, "--image_path", image_dir,
+                    "--output_path", out_dir, "--use_robust_loss_on_prior_position", "1"], log_path, on_line)
+    else:
+        progress(0.02, "incremental mapping held to GPS positions (pycolmap)")
+        run_logged([sys.executable, "-c", _PYCOLMAP_PRIOR_SCRIPT, str(database), str(image_dir), str(out_dir)],
+                   log_path, on_line)
     # Incremental mapping often ends in several models (e.g. two flights at different heights that share few
-    # matches). Each is held to the same GPS positions, so they already share one frame: combine them. A model
-    # whose cameras lie along one line (a single flight line) is left out — positions alone can't fix its
-    # roll about that line.
+    # matches). Each is held to the same GPS positions; to be sure they share one frame whichever engine ran,
+    # each is aligned to the GPS positions (robust Sim3) before they are combined. A model whose cameras lie
+    # along one line (a single flight line) is left out — positions alone can't fix its roll about that line.
     from .colmap_model import merge_reconstructions
+    from .geometry import robust_umeyama
 
     keep, dropped = [], 0
     for p in find_models(out_dir):
         r = read_model(p)
         C = np.array([im.center() for im in r.images.values()])
         sv = np.linalg.svd(C - C.mean(0), compute_uv=False) / np.sqrt(max(len(C), 1)) if len(C) >= 3 else np.zeros(3)
-        if len(C) >= 3 and sv[1] >= max(MIN_SPREAD_M, 0.05 * sv[0]):
-            keep.append(r)
-        else:
+        if not (len(C) >= 3 and sv[1] >= max(MIN_SPREAD_M, 0.05 * sv[0])):
             dropped += len(r.images)
+            continue
+        if positions:
+            names = [im.name for im in r.images.values() if im.name in positions]
+            if len(names) >= 3:
+                by = r.image_by_name()
+                T, _ = robust_umeyama(np.array([by[n].center() for n in names]), np.array([positions[n] for n in names]))
+                r.transform(T)
+        keep.append(r)
     if not keep:
         raise SplatPrepError("GPS-held mapping produced no reconstruction")
     rec = merge_reconstructions(keep)
     progress(1.0, f"registered {len(rec.images)} images (held to GPS; {len(keep)} part(s)"
                   + (f", {dropped} image(s) along single flight lines left out)" if dropped else ")"))
     return rec
+
+
+_PYCOLMAP_PRIOR_SCRIPT = r"""
+import sys, pathlib, pycolmap
+db, img, out = sys.argv[1:4]
+opts = pycolmap.IncrementalPipelineOptions()
+opts.use_prior_position = True
+opts.use_robust_loss_on_prior_position = True
+maps = pycolmap.incremental_mapping(database_path=db, image_path=img, output_path=out, options=opts)
+for idx, rec in maps.items():
+    d = pathlib.Path(out) / str(idx)
+    d.mkdir(parents=True, exist_ok=True)
+    rec.write(str(d))
+print(f"Registered {max((len(r.images) for r in maps.values()), default=0)} images")
+"""
 
 
 _PYCOLMAP_SCRIPT = r"""
