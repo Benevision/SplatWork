@@ -24,7 +24,7 @@ jobs:
   wheel:
     # Visual Studio 2022: windows-latest now has VS 2026 (MSVC 14.51), whose headers crash CUDA 12.8's cudafe++
     runs-on: windows-2022
-    timeout-minutes: 350
+    timeout-minutes: 355   # a hosted job may run 6 hours
     steps:
       - uses: actions/checkout@v5
       - name: Read pin
@@ -100,13 +100,45 @@ jobs:
           # MSVC has no __builtin_clzll (host code): ceil(log2(x)) = bit length of x - 1
           sed -i -E 's/return 64u - static_cast<uint32_t>\(__builtin_clzll\(x - 1\)\);/uint32_t n = 0; for(uint64_t v = x - 1; v != 0; v >>= 1) { ++n; } return n;/' gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu
           ! grep -rn "__builtin_clz" gsplat/cuda/csrc --include=*.cu --include=*.cpp
+      # Resumable build: one compile of every file takes about 6 hours on a 4-core runner, longer than a job may run.
+      # The object files (C:\g\build) are cached even when the build fails or runs out of time, and the next run
+      # reuses them. Ninja rebuilds an object when an input is newer, and a fresh clone makes every input new, so
+      # sources whose content matches the cached build's (build\srchash.txt) and the pinned toolchain headers
+      # (torch, CUDA) get an old timestamp. Changed sources keep their new one and are recompiled.
+      - name: Restore compiled objects
+        if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\g\build
+          key: ${{ steps.pin.outputs.key }}-obj-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ steps.pin.outputs.key }}-obj-
+      - name: Reuse unchanged objects
+        if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          OLD=2001-01-01
+          TORCH_INC=$(python -c "import os, torch; print(os.path.join(os.path.dirname(torch.__file__), 'include'))")
+          find "$(cygpath -u "$TORCH_INC")" "$(cygpath -u "$CUDA_PATH")/include" -type f -exec touch -d $OLD {} +
+          cd /c/g
+          if [ -f build/srchash.txt ]; then
+            same=$( (sha256sum -c build/srchash.txt 2>/dev/null || true) | sed -n 's/: OK$//p')
+            [ -n "$same" ] && printf '%s\n' "$same" | xargs -d '\n' touch -d $OLD
+            echo "reusing objects: $(find build -name '*.obj' | wc -l), unchanged sources: $(printf '%s\n' "$same" | grep -c . || true)"
+            (sha256sum -c build/srchash.txt 2>/dev/null || true) | grep -v ': OK$' || true
+          else
+            echo "no cached objects: full build"
+          fi
       # Built from PowerShell, not Git Bash: Git's own link.exe in /usr/bin would shadow MSVC's linker.
       - name: Build gsplat wheel
         if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        timeout-minutes: 320   # leaves time to save the objects for the next run
         shell: pwsh
         working-directory: C:\g
         env:
-          TORCH_CUDA_ARCH_LIST: ${{ steps.pin.outputs.TORCH_CUDA_ARCH_LIST }}
+          # RTX 20 (7.5), 30 (8.6), 40 (8.9), 50 (12.0) + PTX for newer cards. The Linux wheel also has the data-centre
+          # A100 (8.0) and H100 (9.0); leaving them out cuts a third of the Windows compile time.
+          TORCH_CUDA_ARCH_LIST: "7.5;8.6;8.9;12.0+PTX"
           MAX_JOBS: "4"
           BUILD_EXPERIMENTAL: "0"
           DISTUTILS_USE_SDK: "1"
@@ -120,6 +152,29 @@ jobs:
             Select-String -Pattern '^\s*\[\d+/\d+\]|error|FAILED|Successfully built' | ForEach-Object { $_.Line.Substring(0, [Math]::Min(400, $_.Line.Length)) }
           if (-not (Get-ChildItem "$env:GITHUB_WORKSPACE\wheels-win\gsplat-*win_amd64.whl" -ErrorAction SilentlyContinue)) { exit 1 }
           Get-ChildItem "$env:GITHUB_WORKSPACE\wheels-win"
+      - name: Keep only up-to-date objects
+        if: always() && steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        shell: bash
+        run: |
+          taskkill //F //T //IM ninja.exe 2>/dev/null || true
+          taskkill //F //IM nvcc.exe //IM cicc.exe //IM ptxas.exe //IM cl.exe 2>/dev/null || true
+          cd /c/g
+          [ -d build ] || exit 0
+          # an object ninja still considers out of date (stale, half-written when the time ran out, or never logged)
+          # must not look fresh in the next run
+          for d in $(find build -name build.ninja -printf '%h\n'); do
+            ninja -C "$d" -n -d explain 2>&1 | grep '^ninja explain' | grep -oiE '[a-z]:/[^ ]+\.obj' | sort -u > stale.txt || true
+            echo "$d: $(wc -l < stale.txt) objects out of date"
+            xargs -r -d '\n' rm -f < stale.txt
+          done
+          find gsplat/cuda -type f | sort | xargs -d '\n' sha256sum > build/srchash.txt
+          echo "saving $(find build -name '*.obj' | wc -l) objects, $(du -sh build | cut -f1)"
+      - name: Save compiled objects
+        if: always() && steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\g\build
+          key: ${{ steps.pin.outputs.key }}-obj-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Check the wheel imports (no GPU here, so only the module and its extension load)
         if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
         shell: bash

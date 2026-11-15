@@ -24,7 +24,8 @@ only (no GPU) and what needs real hardware is listed as untested.*
 Known gaps: Windows workers show as "SplatWork for Linux" in other studios' device lists (the protocol doesn't carry
 the OS, and changing it was out of scope); the installer isn't code-signed (SmartScreen warns once). The cu128
 profile (RTX 50 series) uses a gsplat 1.6 wheel compiled in CI and is untested on real RTX 50 hardware — CI only
-proves it compiles and imports.
+proves it compiles and imports. That wheel is built for RTX 20–50 (sm 7.5, 8.6, 8.9, 12.0 + PTX); unlike the Linux
+wheel it leaves out the data-centre A100 / H100 to keep the compile within the CI time limit.
 
 ## Summary
 
@@ -104,8 +105,9 @@ fallback is B, which still reuses the studio core.
 
 - **NVIDIA:** gsplat / CUDA, the same `trainer.py` as Linux. PyTorch publishes CUDA wheels for Windows; gsplat
   publishes prebuilt Windows wheels for some PyTorch / CUDA combinations on its wheel index. Where the combination we
-  need is missing (gsplat 1.6 for cu128), CI builds the wheel on `windows-latest` with the CUDA toolkit and MSVC
-  (`.github/workflows/gsplat-windows-wheel.yml`, same pin as Linux; compiling needs no GPU),
+  need is missing (gsplat 1.6 for cu128), CI builds the wheel on `windows-2022` with the CUDA toolkit and MSVC
+  (`.github/workflows/gsplat-windows-wheel.yml`, same pin as Linux; compiling needs no GPU; a full compile is
+  about 6 hours, so compiled objects are cached and a timed-out run resumes in the next one),
   as `linux/flatpak/build-gsplat-wheel.sh` does for Linux. fused-ssim is optional (the trainer falls back to plain
   PyTorch SSIM).
 - **AMD and Intel:** the shared Vulkan trainer `splatwork-vk-train` (C++17, GLSL → SPIR-V at build time), built for
