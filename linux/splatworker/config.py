@@ -107,6 +107,8 @@ class TrainingConfig:
     bilateralGrid: bool = False
     bilateralGridLR: float = 2e-3
     bilateralGridTV: float = 10.0
+    # ColourGuard (trainer.py): from this step on, each eval checks the grids aren't supplying the scene's colour
+    colourGuardStart: int = 4000
     # Coarse-to-fine: ¼ → ½ → ¾ → full image resolution over the first half of the densification window.
     progressiveResolution: bool = False
     # SSIM contrast/structure on the uncorrected render (luminance on the corrected one) when per-photo colour
@@ -185,6 +187,7 @@ class TrainingConfig:
         need(self.randomInitCount >= 1, "randomInitCount must be >= 1")
         need(self.previewInterval >= 0, "previewInterval must be >= 0 (0 disables previews)")
         need(self.evalInterval >= 0, "evalInterval must be >= 0 (0 disables eval)")
+        need(self.colourGuardStart >= 0, "colourGuardStart must be >= 0")
         for name in ("lrPosition", "lrPositionFinal", "lrColor", "lrSHRest", "lrOpacity",
                      "lrScale", "lrRotation", "bilateralGridLR"):
             need(getattr(self, name) > 0, f"{name} must be > 0")
@@ -326,7 +329,7 @@ class ServerSettings:
     port: int = 7878
     token: Optional[str] = None
     name: Optional[str] = None
-    gpus: Optional[List[int]] = None          # None = all visible GPUs
+    gpus: Optional[List[Any]] = None          # None = every GPU but integrated ones beside others (slots.py)
     mdns: bool = True
     advertise_ips: Optional[List[str]] = None  # None = auto-detect
     max_upload_bytes: int = 20 * 1024 ** 3     # compressed zip size
@@ -338,6 +341,8 @@ class ServerSettings:
     # in the server's environment, sent as the X-SplatWork-Local header); loopback alone is not enough.
     allow_local_datasets: bool = False
     local_secret: Optional[str] = None
+    # which trainer trains: "auto" (gsplat on NVIDIA, else the Vulkan trainer), "gsplat", "vulkan" (vktrain.py)
+    trainer: str = "auto"
 
     @property
     def local_enabled(self) -> bool:

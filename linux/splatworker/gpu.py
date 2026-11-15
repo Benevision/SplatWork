@@ -18,6 +18,16 @@ import importlib.util
 from typing import Dict, List, Optional
 
 
+def normalize_pci(bus_id: str) -> str:
+    """"00000000:01:00.0" (NVML) / "0000:01:00.0" (sysfs, Vulkan) → "0000:01:00.0", lower case."""
+    b = bus_id.strip().lower()
+    dom, _, rest = b.rpartition(":")
+    dom, _, bus = dom.rpartition(":") if dom.count(":") else ("", "", dom)
+    if not dom:
+        return b
+    return f"{int(dom, 16) & 0xFFFF:04x}:{bus}:{rest}"
+
+
 def _nvml_gpus() -> Optional[List[Dict]]:
     try:
         import pynvml  # type: ignore
@@ -35,9 +45,15 @@ def _nvml_gpus() -> Optional[List[Dict]]:
             if isinstance(name, bytes):
                 name = name.decode()
             mem = pynvml.nvmlDeviceGetMemoryInfo(h)
-            out.append({"index": i, "name": name, "vendor": "nvidia",
-                        "memoryMB": int(mem.total // (1024 * 1024)),
-                        "freeMemoryMB": int(mem.free // (1024 * 1024))})
+            g = {"index": i, "name": name, "vendor": "nvidia",
+                 "memoryMB": int(mem.total // (1024 * 1024)),
+                 "freeMemoryMB": int(mem.free // (1024 * 1024))}
+            try:
+                bus = pynvml.nvmlDeviceGetPciInfo(h).busId
+                g["pci"] = normalize_pci(bus.decode() if isinstance(bus, bytes) else str(bus))
+            except Exception:
+                pass
+            out.append(g)
         return out
     except Exception:
         return None
@@ -64,9 +80,13 @@ def _torch_gpus() -> List[Dict]:
                 free, total = torch.cuda.mem_get_info(i)
             except Exception:
                 free, total = props.total_memory, props.total_memory
-            out.append({"index": i, "name": props.name, "vendor": vendor,
-                        "memoryMB": int(total // (1024 * 1024)),
-                        "freeMemoryMB": int(free // (1024 * 1024))})
+            g = {"index": i, "name": props.name, "vendor": vendor,
+                 "memoryMB": int(total // (1024 * 1024)),
+                 "freeMemoryMB": int(free // (1024 * 1024))}
+            if getattr(props, "pci_bus_id", None) is not None:
+                g["pci"] = (f"{int(getattr(props, 'pci_domain_id', 0) or 0):04x}:{int(props.pci_bus_id):02x}:"
+                            f"{int(getattr(props, 'pci_device_id', 0) or 0):02x}.0")
+            out.append(g)
         return out
     except Exception:
         return []

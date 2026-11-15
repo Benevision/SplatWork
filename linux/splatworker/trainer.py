@@ -20,11 +20,12 @@ gsplat APIs relied on (gsplat >= 1.4, tested against the 1.4/1.5 API surface):
 from __future__ import annotations
 
 import math
+import os
 import random
 import time
 import traceback
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -598,6 +599,107 @@ class BilateralGrid:
             for g in self.grids:
                 g.sub_(dev_mean)
 
+    def reset(self):
+        """Every grid back to "no change", with fresh optimiser state (ColourGuard)."""
+        with self.torch.no_grad():
+            for g in self.grids:
+                g.copy_(self.ident)
+                g.grad = None
+        self.opts = [self.torch.optim.Adam([g], lr=o.param_groups[0]["lr"], eps=1e-15)
+                     for g, o in zip(self.grids, self.opts)]
+
+
+class ColourGuard:
+    """Stops per-photo colour correction (the bilateral grid) from taking over the scene's colour.
+
+    With cameras that don't fit the photos (a drone solve ~17 m off) the grids can paint each photo's colours while
+    the splats lose theirs: training looks fine (it is scored with the correction), but the scene itself gets worse
+    and darker — held-out PSNR fell from 14.9 to 9.3 dB on such a run. At every eval from ``start`` on, 8 evenly
+    spaced training photos are rendered *without* the correction and scored (mean PSNR, and Σ render / Σ photo
+    brightness over masked-in pixels). A strike is a PSNR more than 3 dB below the best seen so far; it acts on 2
+    strikes in a row, or at once when the renders are under 0.6× the photos' brightness. The first time every grid
+    goes back to "no change" with fresh Adam state (and the best is forgotten), the second time the correction is
+    turned off for the rest of the run. The Mac's MetalTrainer.guardColourCorrection does the same, as does the
+    Vulkan trainer.
+    """
+
+    VIEWS = 8
+    DROP_DB = 3.0
+    STRIKES = 2
+    DARK = 0.6
+
+    def __init__(self, start: int = 4000):
+        self.start = int(start)
+        self.best: Optional[float] = None
+        self.strikes = 0
+        self.resets = 0
+        self.off = False
+
+    def due(self, step: int) -> bool:
+        return not self.off and step >= self.start
+
+    @classmethod
+    def views(cls, n: int) -> List[int]:
+        """Evenly spaced indices of up to VIEWS of n training photos."""
+        if n <= cls.VIEWS:
+            return list(range(n))
+        return sorted({round(i * (n - 1) / (cls.VIEWS - 1)) for i in range(cls.VIEWS)})
+
+    def update(self, step: int, psnr: Optional[float], brightness: Optional[float]):
+        """One measurement → None, or ("reset" | "off", log line)."""
+        drop = None
+        if psnr is not None:
+            if self.best is not None and psnr < self.best - self.DROP_DB:
+                self.strikes += 1
+                drop = self.best - psnr
+            else:
+                self.strikes = 0
+            self.best = psnr if self.best is None else max(self.best, psnr)
+        dark = brightness is not None and brightness < self.DARK
+        if not dark and self.strikes < self.STRIKES:
+            return None
+        if dark:
+            why = f"without it the scene renders at {brightness:.0%} of the photos' brightness"
+        else:
+            why = f"without it the photos score {drop:.1f} dB below their best"
+        self.strikes = 0
+        self.best = None
+        if self.resets == 0:
+            self.resets = 1
+            return "reset", f"Per-photo colour correction reset at step {step}: it was taking over the scene's colour ({why})"
+        self.off = True
+        return "off", (f"Per-photo colour correction turned off at step {step}: it took over the scene's colour again "
+                       f"({why}). This usually means the cameras don't fit the photos — check the camera solve.")
+
+    def state(self) -> Dict:
+        return {"best": self.best, "strikes": self.strikes, "resets": self.resets, "off": self.off}
+
+    def load(self, s: Optional[Dict]) -> None:
+        if s:
+            self.best = s.get("best")
+            self.strikes = int(s.get("strikes", 0))
+            self.resets = int(s.get("resets", 0))
+            self.off = bool(s.get("off", False))
+
+
+def uncorrected_score(torch, pairs) -> Tuple[Optional[float], Optional[float]]:
+    """ColourGuard's measurement over (render, photo, keep) triples — (H, W, 3) each, keep a 0..1 weight (H, W, 1)
+    or None: the mean PSNR of the clamped renders and Σ render RGB / Σ photo RGB, over the kept pixels."""
+    psnrs, num, den = [], 0.0, 0.0
+    for pred, gt, keep in pairs:
+        pred = pred.clamp(0, 1)
+        w = (torch.ones_like(pred[..., :1]) if keep is None else keep).expand_as(pred)
+        cnt = float(w.sum().item())
+        if cnt <= 0:
+            continue
+        mse = float((((pred - gt) ** 2) * w).sum().item()) / cnt
+        psnrs.append(-10 * math.log10(max(mse, 1e-10)))
+        num += float((pred * w).sum().item())
+        den += float((gt * w).sum().item())
+    if not psnrs:
+        return None, None
+    return float(np.mean(psnrs)), (num / den if den > 1e-6 else None)
+
 
 def init_points(ds: DatasetInfo, cfg: TrainingConfig, region_box, log) -> tuple:
     """Return (xyz [N,3], rgb [N,3]) initial points as numpy arrays."""
@@ -1018,6 +1120,26 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
                 psnrs.append(-10 * math.log10(max(mse, 1e-10)))
         return float(np.mean(psnrs))
 
+    def guard_message():
+        return ("training (colour correction off — check the camera solve)" if guard.off
+                else "training (colour correction was reset)")
+
+    def guard_score(sh_degree, step):
+        """ColourGuard: PSNR and brightness of 8 training photos rendered without their colour correction."""
+        pairs = []
+        with torch.no_grad():
+            for i in ColourGuard.views(len(train_views)):
+                v = train_views[i]
+                img, alpha, _, K, w2c = to_dev(v)
+                if pose_refiner is not None and step >= cfg.poseRefinementStart:
+                    w2c = pose_refiner.apply(i, w2c)
+                renders, alphas, _ = render(w2c, K, v.width, v.height, sh_degree, False)
+                ebg = skybox.sample(skybox.directions(K, w2c, v.width, v.height)) if skybox is not None else eval_bg
+                pred = renders[0, ..., :3] + (1 - alphas[0]) * ebg
+                gt = img if alpha is None else img * alpha + (1 - alpha) * ebg
+                pairs.append((pred, gt, masks.get(id(v))))
+        return uncorrected_score(torch, pairs)
+
     # ---------------------------------------------------------------- loop
     progress.status(state="training", message="training", step=0, numGaussians=n)
     order: List[int] = []
@@ -1046,6 +1168,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         use_appearance = False
         bilagrid = BilateralGrid(torch, cfg, len(train_views), dev)
         log(f"per-photo local colour correction: {len(train_views)} grids of 16×16×8")
+    guard = ColourGuard(cfg.colourGuardStart)
+    train_msg = "training"
     appearance = AppearanceCorrection(torch, cfg, train_views + eval_views, dev) if use_appearance else None
     pose_refiner = PoseRefiner(torch, len(train_views), cfg, dev) if cfg.poseRefinement else None
 
@@ -1077,6 +1201,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             "pose": None if pose_refiner is None else
             {"embed": pose_refiner.embed.state_dict(), "opt": pose_refiner.opt.state_dict()},
             "skybox": None if skybox is None else {"tex": skybox.tex.detach(), "opt": skybox.opt.state_dict()},
+            "colourGuard": guard.state(),
         }
         dst = Path(resume_path)
         tmp = dst.with_name(dst.name + ".tmp")
@@ -1119,6 +1244,11 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
                     p_.copy_(v_)
                 for o, st in zip(appearance.opts, resume["appearance"]["opts"]):
                     o.load_state_dict(st)
+            guard.load(resume.get("colourGuard"))
+            if guard.resets:
+                train_msg = guard_message()
+            if guard.off:
+                bilagrid = None   # turned off before the pause: stays off
             if bilagrid is not None and resume.get("bilagrid"):
                 for g_, v_ in zip(bilagrid.grids, resume["bilagrid"]["grids"]):
                     g_.copy_(v_)
@@ -1307,6 +1437,21 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             last_eval_psnr = evaluate(sh_degree)
             log(f"step {cur}: holdout PSNR {last_eval_psnr:.2f} dB")
 
+        if (bilagrid is not None and cfg.evalInterval and cur % cfg.evalInterval == 0 and cur < cfg.iterations
+                and guard.due(cur)):
+            raw_psnr, bright = guard_score(sh_degree, cur)
+            if os.environ.get("SPLAT_CC_LOG") and raw_psnr is not None:
+                log(f"step {cur}: uncorrected PSNR {raw_psnr:.2f} dB, brightness {bright or 0:.3f} of the photos'")
+            act = guard.update(cur, raw_psnr, bright)
+            if act is not None:
+                log(act[1])
+                if act[0] == "reset":
+                    bilagrid.reset()
+                else:
+                    bilagrid = None
+                train_msg = guard_message()
+                progress.status(message=train_msg)
+
         if cfg.previewInterval and preview_path is not None and cur % cfg.previewInterval == 0 \
                 and cur < cfg.iterations:
             export_preview_splat(params, Path(preview_path))
@@ -1322,7 +1467,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             progress.status(step=cur, loss=loss_ema,
                             psnr=psnr_ema, evalPsnr=last_eval_psnr,   # train and held-out kept apart
                             numGaussians=ngs, elapsedSeconds=elapsed,
-                            etaSeconds=rate * (cfg.iterations - cur), message="training")
+                            etaSeconds=rate * (cfg.iterations - cur), message=train_msg)
             if cur % 100 == 0 or cur == cfg.iterations:
                 log(f"step {cur}/{cfg.iterations} loss {loss_ema or 0:.4f} psnr {psnr_ema or 0:.2f} "
                     f"gaussians {ngs} sh {sh_degree}")

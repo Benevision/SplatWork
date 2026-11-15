@@ -135,6 +135,7 @@ struct AppCommands: Commands {
 struct PreferencesView: View {
     let model: AppModel
     @AppStorage("receiveFromiPhone") private var receive = true
+    @AppStorage(UploadQuality.defaultsKey) private var uploadQuality = UploadQuality.standard.rawValue
     var body: some View {
         Form {
             Picker("Experience", selection: Binding(get: { model.mode }, set: { model.mode = $0 })) {
@@ -142,6 +143,13 @@ struct PreferencesView: View {
             }
             Text("Easy mode shows presets and essential options. Advanced shows every parameter with full documentation.").font(.caption).foregroundStyle(.secondary)
             Toggle("Receive captures from iPhone at launch", isOn: $receive)
+            Section("Uploads to workers") {
+                Picker("Upload size", selection: $uploadQuality) {
+                    ForEach(UploadQuality.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                Text("Photos sent to a Linux worker are re-saved for the upload only; your project keeps the originals. The difference is far below what a splat can show. Uploads go in batches of about 200 MB, so an interrupted upload picks up where it stopped. Videos are always sent as they are.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Updates") {
                 Toggle("Check for updates automatically", isOn: Bindable(AppUpdater.shared).autoCheck)
                 Toggle("Download updates in the background", isOn: Bindable(AppUpdater.shared).autoDownload)

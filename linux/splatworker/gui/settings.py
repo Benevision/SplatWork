@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..slots import is_slot_key
 from .paths import AppPaths
 
 SETTINGS_VERSION = 1
@@ -30,7 +31,7 @@ class AppSettings:
     require_token: bool = True
     mdns: bool = True
     advertise_ip: str = ""              # "" = auto-detect
-    gpus: Optional[List[int]] = None    # None = every GPU
+    gpus: Optional[List[Any]] = None    # None = every GPU but integrated ones; CUDA indices, "vk:<pci>" (slots.py)
     max_upload_gb: float = 20.0
     max_extracted_gb: float = 40.0
     start_server_on_launch: bool = True
@@ -38,6 +39,8 @@ class AppSettings:
     autostart: bool = False
     auto_update: bool = True            # Flatpak: install updates and restart into them when no job runs
     log_level: str = "info"
+    # Which trainer trains: "auto" (gsplat on NVIDIA, the Vulkan trainer on AMD / Intel), "gsplat", "vulkan"
+    trainer: str = "auto"
     # Extra components the setup assistant installed (informational, kept here so the
     # "repair" button can reinstall the same set).
     with_splatprep: bool = True
@@ -108,12 +111,13 @@ class AppSettings:
         check("advertise_ip", ip_ok, "Enter an IPv4 address such as 192.168.1.20, or leave it empty.")
         gpus_ok = self.gpus is None or (
             isinstance(self.gpus, list) and len(self.gpus) > 0
-            and all(is_int(g) and g >= 0 for g in self.gpus) and len(set(self.gpus)) == len(self.gpus))
+            and all(is_slot_key(g) for g in self.gpus) and len(set(self.gpus)) == len(self.gpus))
         check("gpus", gpus_ok, "Select at least one GPU.")
         check("max_upload_gb", is_num(self.max_upload_gb) and 0.1 <= self.max_upload_gb <= 10000,
               "Maximum upload size must be between 0.1 and 10000 GB.")
         check("max_extracted_gb", is_num(self.max_extracted_gb) and 0.1 <= self.max_extracted_gb <= 20000,
               "Maximum unpacked size must be between 0.1 and 20000 GB.")
+        check("trainer", self.trainer in ("auto", "gsplat", "vulkan"), "Unknown trainer.")
         check("log_level", self.log_level in ("critical", "error", "warning", "info", "debug"),
               "Unknown log level.")
         for name in ("require_token", "mdns", "start_server_on_launch", "run_in_background",
@@ -144,6 +148,8 @@ class AppSettings:
             args.append("--no-mdns")
         if self.advertise_ip:
             args += ["--advertise-ip", self.advertise_ip]
+        if self.trainer != "auto":
+            args += ["--trainer", self.trainer]
         return args
 
 

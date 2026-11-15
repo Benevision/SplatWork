@@ -234,13 +234,329 @@ def test_region_trims_the_result(build_dir, dataset, tmp_path):
         assert all(lo[k] - 1e-6 <= r[k] <= hi[k] + 1e-6 for k in range(3))
 
 
-def test_invalid_config_and_unsupported_features(build_dir, dataset, tmp_path):
+def test_invalid_config_and_feature_notes(build_dir, dataset, tmp_path):
     rc, msgs = run(build_dir, dataset, tmp_path, {"strategy": "bogus"})
     assert rc == 2
     assert "strategy must be one of" in of(msgs, "error")[0]["message"]
+    # stage 2b: every TrainingConfig feature is implemented; depth priors without a cache are reported
     rc, msgs = run(build_dir, dataset, tmp_path, {**BASE, "iterations": 5, "appearanceCorrection": True,
-                                                  "transientMasking": True})
-    assert rc == 0
-    notes = [m["message"] for m in of(msgs, "log") if "not supported by the Vulkan trainer yet" in m["message"]]
-    assert any(n.startswith("appearanceCorrection") for n in notes)
-    assert any(n.startswith("transientMasking") for n in notes)
+                                                  "transientMasking": True, "normalWeight": 0.05, "depthPriors": "auto"})
+    assert rc == 0, of(msgs, "error")
+    logs = [m["message"] for m in of(msgs, "log")]
+    assert not [n for n in logs if "not supported by the Vulkan trainer" in n]
+    assert any("can't predict depth maps" in n for n in logs)
+
+
+# ---------------------------------------------------------------- stage 2b features (end to end)
+
+FEAT = {**BASE, "iterations": 600, "densifyStop": 500, "shDegreeInterval": 200, "evalInterval": 600, "previewInterval": 0}
+
+
+@pytest.fixture(scope="module")
+def feature_dataset(tmp_path_factory):
+    """make_synthetic.py with feature options, generated once per module and name."""
+    made = {}
+
+    def make(name, *options):
+        if name not in made:
+            out = tmp_path_factory.mktemp(f"vktrain-{name}")
+            r = subprocess.run([sys.executable, str(VKTRAIN / "tools" / "make_synthetic.py"), str(out), *options],
+                               capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr
+            made[name] = out
+        return made[name]
+    pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    return make
+
+
+def done_of(msgs):
+    d = of(msgs, "done")
+    assert d, of(msgs, "error")
+    return d[-1]
+
+
+def test_skybox(build_dir, feature_dataset, tmp_path):
+    """Photos with sky masks: the panorama at infinity learns the sky (sky.png / sky.json next to the result, as the
+    CUDA trainer writes them) and the holdout photos are explained better than with the splats alone."""
+    from PIL import Image
+
+    ds = feature_dataset("sky", "--sky")
+    rc, on = run(build_dir, ds, tmp_path, {**FEAT, "skyboxResolution": 32}, name="on")
+    assert rc == 0, of(on, "error")
+    rc, off = run(build_dir, ds, tmp_path, {**FEAT, "skybox": "off"}, name="off")
+    assert rc == 0, of(off, "error")
+    a, b = done_of(on)["evalPsnr"], done_of(off)["evalPsnr"]
+    print(f"skybox: holdout PSNR {a:.2f} dB with, {b:.2f} dB without")
+    assert any("learned skybox 64×32 at infinity; 14 photos have a sky mask" in m["message"] for m in of(on, "log"))
+    assert a > b + 0.5
+    meta = json.loads((tmp_path / "on.sky.json").read_text())
+    assert meta["format"] == "equirectangular" and meta["image"] == "on.sky.png"
+    assert meta["up"] == pytest.approx([0, -1, 0], abs=1e-6) and meta["forward"] == pytest.approx([0, 0, 1], abs=1e-6)
+    img = Image.open(tmp_path / "on.sky.png")
+    assert img.size == (64, 32) and img.mode == "RGB"
+    px = list(img.getdata())
+    top = px[:64]                       # straight up: never seen, stays at the initial colour
+    assert all(p == (153, 166, 178) for p in top)
+    near = [p for p in px[13 * 64:15 * 64] if p != (153, 166, 178)]   # just above the horizon: the blue sky
+    assert len(near) > 64 and sum(p[2] - p[0] for p in near) / len(near) > 60
+    assert not (tmp_path / "off.sky.png").exists()
+
+
+def test_colour_correction(build_dir, feature_dataset, tmp_path):
+    """Training photos with their own exposure / tint (holdouts with the scene's colours): per-photo colour
+    correction (affine, and the bilateral grid with decoupled SSIM) keeps the splats at the true colours."""
+    ds = feature_dataset("shift", "--color-shift")
+    res = {}
+    for name, extra in (("off", {}), ("affine", {"appearanceCorrection": True}),
+                        ("grid", {"bilateralGrid": True, "decoupledSSIM": True})):
+        rc, msgs = run(build_dir, ds, tmp_path, {**FEAT, **extra}, name=name)
+        assert rc == 0, of(msgs, "error")
+        res[name] = done_of(msgs)["evalPsnr"]
+    print(f"colour correction: holdout PSNR {res}")
+    assert res["affine"] > res["off"] + 1.0
+    assert res["grid"] > res["off"] + 0.5
+
+
+GUARD = {**FEAT, "bilateralGrid": True, "decoupledSSIM": True, "evalInterval": 100, "colourGuardStart": 100}
+
+
+def guard_lines(msgs):
+    return [m["message"] for m in of(msgs, "log") if "Per-photo colour correction" in m["message"]]
+
+
+def test_colour_guard_quiet_on_healthy_colour_shifts(build_dir, feature_dataset, tmp_path, monkeypatch):
+    """Photos with their own exposure / tint are what the bilateral grid is for: the uncorrected renders keep
+    improving and stay near the photos' brightness, and the guard never acts."""
+    monkeypatch.setenv("SPLAT_CC_LOG", "1")
+    ds = feature_dataset("shift", "--color-shift")
+    rc, msgs = run(build_dir, ds, tmp_path, GUARD, name="healthy")
+    assert rc == 0, of(msgs, "error")
+    scores = [(float(m["message"].split("PSNR ")[1].split()[0]), float(m["message"].split("brightness ")[1].split()[0]))
+              for m in of(msgs, "log") if "uncorrected PSNR" in m["message"]]
+    print(f"colour guard, healthy: (PSNR, brightness) {scores}, holdout {done_of(msgs)['evalPsnr']:.2f} dB")
+    assert len(scores) == 5 and min(b for _, b in scores) > 0.8
+    assert all(b[0] > a[0] - 1.0 for a, b in zip(scores, scores[1:]))
+    assert guard_lines(msgs) == []
+    assert done_of(msgs)["evalPsnr"] > 20.5
+
+
+def test_colour_guard_resets_then_turns_off(build_dir, feature_dataset, tmp_path):
+    """The splats' colours blackened at step 300 (as a wrong camera solve left them, the grids painting the
+    photos): the grids are reset, and when the renders are still dark at the next eval the correction is turned
+    off — and a run resumed after that keeps it off."""
+    ds = feature_dataset("shift", "--color-shift")
+    cfg = {**GUARD, "iterations": 700}
+    rc, msgs = run(build_dir, ds, tmp_path, cfg, "--darken-at", "300", "--snapshot-at", "550", name="dark")
+    assert rc == 0, of(msgs, "error")
+    lines = guard_lines(msgs)
+    assert len(lines) == 2, lines
+    assert lines[0].startswith("Per-photo colour correction reset at step 300: it was taking over the scene's colour "
+                               "(without it the scene renders at 0% of the photos' brightness)")
+    assert lines[1].startswith("Per-photo colour correction turned off at step 400")
+    assert "check the camera solve" in lines[1]
+    status = [m.get("message") for m in of(msgs, "status")]
+    assert "training (colour correction off — check the camera solve)" in status
+
+    snap = tmp_path / "dark-snapshot.vkstate"
+    shutil.copy(tmp_path / "dark-job" / "snapshot.vkstate", snap)
+    rc, cont = run(build_dir, ds, tmp_path, cfg, "--resume", str(snap), name="dark-cont")
+    assert rc == 0, of(cont, "error")
+    assert guard_lines(cont) == []
+    assert of(cont, "status")[-1]["message"] == "training (colour correction off — check the camera solve)"
+
+
+def test_colour_guard_acts_on_falling_psnr(build_dir, feature_dataset, tmp_path):
+    """From step 450 every training photo gets its neighbour's camera (cameras that don't fit the photos): the
+    renders without the correction score far below their best at two evals in a row, so the grids are reset."""
+    ds = feature_dataset("shift", "--color-shift")
+    rc, msgs = run(build_dir, ds, tmp_path, {**GUARD, "iterations": 700}, "--scramble-at", "450", name="scrambled")
+    assert rc == 0, of(msgs, "error")
+    lines = guard_lines(msgs)
+    assert len(lines) == 1, lines
+    assert lines[0].startswith("Per-photo colour correction reset at step 600: it was taking over the scene's colour "
+                               "(without it the photos score ")
+    assert lines[0].endswith(" dB below their best)")
+
+
+def test_depth_supervision(build_dir, feature_dataset, tmp_path):
+    """Sensor depth maps (float16, half resolution): the depth loss (and the depth-normal loss) pull the rendered
+    depth onto the maps — the holdout depth error drops well below an RGB-only run's."""
+    ds = feature_dataset("depth", "--depth")
+    rc, off = run(build_dir, ds, tmp_path, {**FEAT, "depthWeight": 0}, name="off")
+    assert rc == 0, of(off, "error")
+    rc, on = run(build_dir, ds, tmp_path, {**FEAT, "normalWeight": 0.05, "normalStart": 200}, name="on")
+    assert rc == 0, of(on, "error")
+    e0, e1 = done_of(off)["features"]["evalDepthError"], done_of(on)["features"]["evalDepthError"]
+    print(f"depth: holdout depth error {e1:.3f} with depth supervision, {e0:.3f} without")
+    assert any("depth supervision weight 0.1" in m["message"] for m in of(on, "log"))
+    assert e1 < 0.5 * e0
+
+
+def test_transient_masking(build_dir, feature_dataset, tmp_path):
+    """Unmasked moving objects in 6 training photos: the masker drops their pixels (and few elsewhere)."""
+    ds = feature_dataset("trans", "--transients", "6")
+    cfg = {**FEAT, "transientMasking": True, "transientStart": 100, "transientMaxViewGap": 90}
+    rc, msgs = run(build_dir, ds, tmp_path, cfg, "--trace-every", "1")
+    assert rc == 0, of(msgs, "error")
+    train = [i for i in range(16) if i % 8 != 7]
+    with_obj = set(train[2::max(1, len(train) // 6)][:6])
+    tr = [m for m in of(msgs, "trace") if "outliers" in m and m["step"] > 300]
+    a = [m["outliers"] for m in tr if m["camera"] in with_obj]
+    b = [m["outliers"] for m in tr if m["camera"] not in with_obj]
+    fa, fb = sum(a) / len(a), sum(b) / len(b)
+    print(f"transient masking: {100 * fa:.1f} % of the pixels dropped in photos with a moving object, {100 * fb:.2f} % "
+          f"in the others (the object covers 8.3 %)")
+    assert fa > 0.04 and fb < 0.01
+    assert done_of(msgs)["features"]["transientFraction"] > 0
+
+
+def test_pose_refinement(build_dir, feature_dataset, tmp_path):
+    """Training poses perturbed by ~1 cm / 0.6°: per-photo pose corrections recover a sharper scene (the holdouts
+    have exact poses)."""
+    ds = feature_dataset("pose", "--pose-noise", "0.01")
+    rc, off = run(build_dir, ds, tmp_path, FEAT, name="off")
+    assert rc == 0, of(off, "error")
+    rc, on = run(build_dir, ds, tmp_path, {**FEAT, "poseRefinement": True, "poseRefinementStart": 100,
+                                           "poseRefinementLR": 0.001}, name="on")
+    assert rc == 0, of(on, "error")
+    a, b = done_of(on), done_of(off)
+    print(f"pose refinement: holdout PSNR {a['evalPsnr']:.2f} dB with, {b['evalPsnr']:.2f} dB without; mean correction "
+          f"{a['features']['poseTranslation']:.4f} / {a['features']['poseRotationDeg']:.2f}°")
+    assert a["evalPsnr"] > b["evalPsnr"] + 1.0
+    assert 0.002 < a["features"]["poseTranslation"] < 0.2
+
+
+def test_compact_optimizer(build_dir, dataset, tmp_path):
+    """optimizerPrecision "compact" (bf16 / 8-bit Adam moments on the GPU, carried losslessly through the host-side
+    densification) trains as well as fp32 Adam."""
+    cfg = {**FEAT, "strategy": "adaptive"}
+    rc, a = run(build_dir, dataset, tmp_path, cfg, name="fp32")
+    assert rc == 0, of(a, "error")
+    rc, b = run(build_dir, dataset, tmp_path, {**cfg, "optimizerPrecision": "compact"}, name="compact")
+    assert rc == 0, of(b, "error")
+    pa, pb = done_of(a)["evalPsnr"], done_of(b)["evalPsnr"]
+    print(f"compact Adam: holdout PSNR {pb:.2f} dB (fp32 {pa:.2f} dB), {done_of(b)['numGaussians']} splats")
+    assert any("optimizerPrecision=compact" in m["message"] and "state 152 B" in m["message"] for m in of(b, "log"))
+    # One-sided: float-atomic ordering on lavapipe moves either run by up to ~1 dB (compact once came out 0.9 dB
+    # *better*), while broken compact moments cost several dB. Compact must not trail fp32, nor fall below the
+    # fp32 runs' usual range (22.6-23.5 dB).
+    assert pb > pa - 0.75
+    assert pb > 21.5
+    assert done_of(b)["numGaussians"] > 2 * 3000   # densification ran on the carried moments
+
+
+def test_pause_resume_with_features(build_dir, feature_dataset, tmp_path):
+    """The saved state includes the skybox, per-photo colour models, pose corrections, the transient threshold and
+    compact Adam moments: a run resumed at step 250 follows the uninterrupted one."""
+    ds = feature_dataset("sky", "--sky")
+    cfg = {**BASE, "iterations": 320, "evalInterval": 0, "previewInterval": 0, "skyboxResolution": 32,
+           "appearanceCorrection": True, "transientMasking": True, "transientStart": 50, "transientMaxViewGap": 90,
+           "poseRefinement": True, "poseRefinementStart": 100, "optimizerPrecision": "compact"}
+    rc, ref = run(build_dir, ds, tmp_path, cfg, "--trace-every", "1", "--snapshot-at", "250", name="ref")
+    assert rc == 0, of(ref, "error")
+    snap = tmp_path / "snapshot-copy.vkstate"   # a finished resumed run deletes the state it continued from
+    shutil.copy(tmp_path / "ref-job" / "snapshot.vkstate", snap)
+    rc, cont = run(build_dir, ds, tmp_path, cfg, "--trace-every", "1", "--resume",
+                   str(tmp_path / "ref-job" / "snapshot.vkstate"), name="cont")
+    assert rc == 0, of(cont, "error")
+    a = {m["step"]: m for m in of(ref, "trace")}
+    c = {m["step"]: m for m in of(cont, "trace")}
+    rel = [abs(c[s]["loss"] - a[s]["loss"]) / a[s]["loss"] for s in range(251, 321)]
+    print(f"features: resumed vs uninterrupted, max relative loss difference steps 251-260: {max(rel[:10]):.2e}, "
+          f"251-320: {max(rel):.2e}")
+    assert max(rel[:10]) < 1e-3
+    assert max(rel) < 2e-2
+    # a state saved with other features does not load
+    rc, bad = run(build_dir, ds, tmp_path, {**cfg, "poseRefinement": False}, "--resume", str(snap), name="bad")
+    assert rc == 1 and "features" in of(bad, "error")[0]["message"]
+
+
+# ----------------------------------------------------------- through the worker
+
+def test_worker_job_pause_resume_and_info(build_dir, dataset, tmp_path, monkeypatch):
+    """splatworker.vktrain as the server runs it: --info, the trainer choice, a job paused on request and resumed
+    from resume.vkstate, the result and the done stats."""
+    import queue
+    import threading
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from splatworker import vktrain
+
+    monkeypatch.setenv(vktrain.BINARY_ENV, str(build_dir / "splatwork-vk-train"))
+    monkeypatch.setenv(vktrain.ALLOW_CPU_ENV, "1")         # lavapipe is a CPU driver
+    vktrain._info_cache.clear()
+    info = vktrain.device_info()
+    assert info["ok"] and info["interface"] == vktrain.INTERFACE and info["deviceType"] in (
+        "cpu", "discrete", "integrated", "virtual", "other")
+    assert vktrain.select("vulkan")["trainer"] == "vulkan"
+
+    # --list-devices and the job slots (slots.py): lavapipe is one device, its slot passes --device 0
+    from splatworker import slots
+
+    vktrain._list_cache.clear()
+    listed = vktrain.list_devices()
+    assert listed["ok"] and listed["devices"], listed
+    dev = listed["devices"][0]
+    assert dev["index"] == 0 and dev["name"] == info["device"] and dev["deviceType"] == info["deviceType"]
+    assert set(dev) >= {"name", "driver", "deviceType", "vendorID", "deviceID", "memoryMB", "pci"}
+    plan = slots.plan(None, [], listed["devices"], "vulkan")
+    assert plan[0].vulkan == 0 and not plan[0].slow
+
+    job = tmp_path / "job"
+    job.mkdir()
+    cfg = {**BASE, "iterations": 300, "previewInterval": 100, "evalInterval": 100}
+
+    def run_job(pause_at=None):
+        q = queue.Queue()
+        cancel, pause, ckpt = threading.Event(), threading.Event(), threading.Event()
+        t = threading.Thread(target=vktrain.subprocess_entry,
+                             args=(str(dataset), cfg, str(job), plan[0].vulkan, q, cancel, pause, ckpt))
+        t.start()
+        msgs = []
+        while True:
+            kind, payload = q.get(timeout=600)
+            msgs.append((kind, payload))
+            if pause_at and kind == "status" and (payload.get("step") or 0) >= pause_at:
+                pause.set()
+            if kind in ("done", "paused", "cancelled", "error"):
+                t.join(30)
+                return msgs, (kind, payload)
+
+    msgs, out = run_job(pause_at=120)
+    assert out[0] == "paused", msgs[-5:]
+    assert (job / "resume.vkstate").is_file() and (job / "checkpoint.ply").is_file()
+    assert any(k == "preview" for k, _ in msgs) and (job / "preview.splat").is_file()
+    msgs, out = run_job()
+    assert out[0] == "done", msgs[-5:]
+    stats = out[1]
+    assert stats["trainer"] == "vulkan" and stats["numGaussians"] > 0 and stats["steps"] < 300
+    assert stats["psnr"] > 15
+    assert (job / "result.ply").is_file() and not (job / "resume.vkstate").exists()
+
+
+def test_gpu_speed_measurement(build_dir, tmp_path, monkeypatch):
+    """gpuspeed.py through the real program on lavapipe (a smaller scene than on a GPU): a record with the
+    program's steps/s, saved per device and driver, and read back into the slot."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    pytest.importorskip("numpy")
+    from splatworker import gpuspeed, slots, vktrain
+    from splatworker.studio.benchmark import BenchmarkSpec
+
+    monkeypatch.setenv(vktrain.BINARY_ENV, str(build_dir / "splatwork-vk-train"))
+    monkeypatch.setenv(vktrain.ALLOW_CPU_ENV, "1")
+    monkeypatch.setenv(gpuspeed.PATH_ENV, str(tmp_path / "gpu-speeds.json"))
+    monkeypatch.setattr(gpuspeed, "STEPS", 40)
+    monkeypatch.setattr(gpuspeed, "_scene_spec", lambda: BenchmarkSpec(width=160, height=120, views=6, splats=5000,
+                                                                       steps=40, measure_from=10))
+    vktrain._list_cache.clear()
+    dev = vktrain.list_devices()["devices"][0]
+    out = gpuspeed.measure_all([dev], tmp_path / "scene")
+    rec = out[gpuspeed.device_key(dev)]
+    assert "error" not in rec, rec
+    print(f"gpu speed on {dev['name']}: {rec['stepsPerSecond']:.1f} steps/s")
+    assert rec["stepsPerSecond"] > 0 and rec["steps"] == 40 and rec["splats"] == 5000
+    plan = slots.plan(None, [], [dev], "vulkan", gpuspeed.load())
+    assert plan[0].speed == rec["stepsPerSecond"] and plan[0].relative == 1.0 and not plan[0].slow
+    bad = gpuspeed.measure_all([{**dev, "index": 7, "name": "missing"}], tmp_path / "scene")
+    assert list(bad.values())[0]["error"]

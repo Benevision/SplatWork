@@ -34,8 +34,15 @@ struct NewProjectSheet: View {
     @State private var showAll = false
     @State private var dynamicClasses = MaskingOptions.defaultDynamicClasses.joined(separator: ", ")
     @State private var showTrainingDetails = false
+    /// Home video: the clips splatprep found (analysed when the source is chosen), and where its thumbnails are.
+    @State private var homeAnalysis: HomeVideoAnalysis? = nil
+    @State private var homeAnalysisDir: URL? = nil
+    @State private var homeAnalysisStatus: String? = nil
+    @State private var homeAnalysisError: String? = nil
     private var effectiveMode: ExperienceMode { showAll ? .advanced : mode }
     private var prep: PrepSession { model.prep }
+    @State private var prepPreview = PrepPreview()
+
     private var python = PythonEnvironment.shared
 
     enum SolverKind: String, CaseIterable, Identifiable { case automatic, objectCapture, learned, fromCapture; var id: String { rawValue } }
@@ -66,7 +73,7 @@ struct NewProjectSheet: View {
             Divider()
             footer
         }
-        .frame(width: 680, height: 620)
+        .frame(width: prep.running ? 940 : 680, height: prep.running ? 760 : 620)
         .onAppear {
             // Reopened while preparing (or after a run that failed while hidden): show that run, don't reset it.
             if prep.running || prep.error != nil { return }
@@ -152,6 +159,7 @@ struct NewProjectSheet: View {
                 Menu("Change…") {
                     Button("Photos folder…") { choose(dir: true) { .photos(folder: $0) } }
                     Button("Video…") { choose(dir: false) { .video($0) } }
+                    Button("Home video (VHS, camcorder tape)…") { choose(dir: false) { .homeVideo($0) } }
                     Button("360° video…") { choose(dir: false) { .video360($0) } }
                     Button("360° photos folder…") { choose(dir: true) { .photos360(folder: $0) } }
                     Button("Stereo video…") { choose(dir: false) { .stereoVideo(left: $0, right: nil) } }
@@ -181,9 +189,107 @@ struct NewProjectSheet: View {
         .font(.callout)
         if let sv = survey, sv.isDrone || aerial || sv.withLocation > 0 { locationPanel(sv) }
         if let s = source { sourceOptions(s) }
+        if case .homeVideo = source { homeVideoPanel }
+    }
+
+    // MARK: home video
+
+    /// The clips of an old home video, each with what it is good for and a tick box.
+    @ViewBuilder private var homeVideoPanel: some View {
+        PanelSection(title: "Clips", systemImage: "film.stack") {
+            if let a = homeAnalysis {
+                Text("Found \(a.summary). The clip with the most depth is ticked. Tick other clips of the same place to join them; a clip that turns out to show somewhere else is left out. For another place, make a separate project with its clip.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(a.clips.filter(\.offerable)) { c in homeClipRow(c) }
+                let hidden = a.clips.filter { !$0.offerable }.count
+                if hidden > 0 {
+                    Text("\(hidden) more \(hidden == 1 ? "stretch is" : "stretches are") too short or blank and not shown.").font(.caption).foregroundStyle(.secondary)
+                }
+                if chosenClips(a).count > 1 {
+                    Label("Tick several clips only when they show the same place. Clips of different places can't be joined: the solve leaves them out, and it takes much longer.",
+                          systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if chosenClips(a).isEmpty {
+                    Label("Tick at least one clip.", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                }
+                SettingRow(id: "source.homeVideoFrames") { IntField(value: $options.homeVideo.frameCount, range: 50...2000, step: 50) }
+                SettingRow(id: "source.homeVideoRestore") {
+                    HStack {
+                        Toggle("Denoise", isOn: $options.homeVideo.denoise)
+                        Toggle("Even out colour", isOn: $options.homeVideo.colour)
+                        Toggle("Repair tracking lines", isOn: $options.homeVideo.repairDropouts)
+                    }
+                }
+            } else if let e = homeAnalysisError {
+                Label(e, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                Button("Try again") { surveySource() }
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(homeAnalysisStatus ?? "Looking for the clips in the video…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .font(.callout)
+    }
+
+    private func chosenClips(_ a: HomeVideoAnalysis) -> Set<Int> {
+        Set(options.homeVideo.clips ?? a.recommended.map { [$0] } ?? [])
+    }
+
+    @ViewBuilder private func homeClipRow(_ c: HomeVideoClip) -> some View {
+        let a = homeAnalysis!
+        HStack(spacing: 10) {
+            Toggle("", isOn: Binding(get: { chosenClips(a).contains(c.id) }, set: { on in
+                var s = chosenClips(a)
+                if on { s.insert(c.id) } else { s.remove(c.id) }
+                options.homeVideo.clips = s.sorted()
+            })).labelsHidden()
+            Group {
+                if let dir = homeAnalysisDir, let t = c.thumbnail, let img = NSImage(contentsOf: dir.appendingPathComponent(t)) {
+                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    Rectangle().fill(.quaternary)
+                }
+            }
+            .frame(width: 80, height: 60).clipShape(RoundedRectangle(cornerRadius: 4))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Clip \(c.id + 1) · \(Self.clock(c.start))–\(Self.clock(c.end)) (\(Int(c.duration.rounded())) s)").font(.callout.monospacedDigit())
+                Text(c.verdictTitle + (c.id == a.recommended ? " · best" : "") + (c.zooms == true ? " · zooms" : "") + (c.overlay == true ? " · date stamp masked" : ""))
+                    .font(.caption).foregroundStyle(c.usable ? Color.secondary : Color.orange)
+            }
+            Spacer()
+        }
+    }
+
+    static func clock(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
+
+    private func analyseHomeVideo(_ u: URL) {
+        homeAnalysis = nil; homeAnalysisError = nil; homeAnalysisStatus = nil
+        Task {
+            await python.refresh()
+            guard case .ready = python.state else {
+                homeAnalysisError = "Restoring home video needs the Models pack on this Mac (Models & Benchmarks)."
+                return
+            }
+            do {
+                let (a, dir) = try await HomeVideoIngest.analyse(video: u) { p in
+                    Task { @MainActor in homeAnalysisStatus = p.message.isEmpty ? nil : p.message }
+                }
+                guard source == .homeVideo(u) else { return }
+                homeAnalysis = a; homeAnalysisDir = dir
+            } catch {
+                guard source == .homeVideo(u) else { return }
+                homeAnalysisError = "Couldn't read the clips: \(error.localizedDescription)"
+            }
+        }
     }
 
     @ViewBuilder private func sourceOptions(_ s: SourceDescription) -> some View {
+        if case .homeVideo = s {} else { preparationPanel(s) }
+    }
+
+    @ViewBuilder private func preparationPanel(_ s: SourceDescription) -> some View {
         PanelSection(title: "Preparation", systemImage: "slider.horizontal.3") {
             SettingRow(id: "source.maxImageSize") {
                 Picker("", selection: Binding(get: { options.maxImageSize ?? 0 }, set: { options.maxImageSize = $0 == 0 ? nil : $0 })) {
@@ -376,7 +482,7 @@ struct NewProjectSheet: View {
     }
 
     private var isVideoSource: Bool {
-        switch source { case .video, .video360: return true; default: return false }
+        switch source { case .video, .video360, .homeVideo: return true; default: return false }
     }
 
     @ViewBuilder private var trainingPage: some View {
@@ -451,45 +557,23 @@ struct NewProjectSheet: View {
                 Text(e).textSelection(.enabled)
                 Text("Common fixes: use more overlapping images, try a different camera solver, or enable masking for moving objects.").foregroundStyle(.secondary)
             } else {
-                // Redraw once a second so elapsed time / ETA / heartbeat stay live even during long silent steps.
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Preparing \(projectName.isEmpty ? prep.projectDir?.lastPathComponent ?? "" : projectName)").font(.title2.bold())
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Overall").font(.headline)
-                                Spacer()
-                                Text("\(Int(prep.overall * 100)) %").font(.headline.monospacedDigit())
-                            }
-                            ProgressView(value: prep.overall)
-                            HStack(spacing: 14) {
-                                Label("Elapsed \(formatDuration(prep.elapsed))", systemImage: "clock")
-                                if let eta = prep.eta { Label("About \(formatDuration(eta)) left", systemImage: "hourglass") }
-                                else { Label("Estimating time left…", systemImage: "hourglass") }
-                                Spacer()
-                                heartbeat
-                            }
-                            .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                        stageList
-                        if prep.thenTrain {
-                            Label("Training starts automatically when the dataset is ready — follow it in the Train panel and the banner at the bottom of the viewer.", systemImage: "arrow.turn.down.right")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                    }
-                }
+                PrepProgressView(prep: prep, title: "Preparing \(projectName.isEmpty ? prep.projectDir?.lastPathComponent ?? "" : projectName)",
+                                 summary: prep.summary, workerName: prep.workerName,
+                                 preview: prepPreview)
             }
-            GroupBox("Log") {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 1) {
-                            ForEach(Array(prep.log.enumerated()), id: \.offset) { i, l in Text(l).id(i) }
+            if prep.error != nil {
+                GroupBox("Log") {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 1) {
+                                ForEach(Array(prep.log.enumerated()), id: \.offset) { i, l in Text(l).id(i) }
+                            }
+                            .font(.caption.monospaced()).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                         }
-                        .font(.caption.monospaced()).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                        .onAppear { if !prep.log.isEmpty { proxy.scrollTo(prep.log.count - 1, anchor: .bottom) } }
                     }
-                    .onChange(of: prep.log.count) { _, n in if n > 0 { proxy.scrollTo(n - 1, anchor: .bottom) } }
+                    .frame(maxHeight: .infinity)
                 }
-                .frame(maxHeight: .infinity)
             }
         }
         .padding(20)
@@ -620,6 +704,7 @@ struct NewProjectSheet: View {
         let forced = model.newProjectAerial
         model.newProjectAerial = false
         guard let s = source else { survey = nil; return }
+        if case .homeVideo(let u) = s { analyseHomeVideo(u) }
         Task.detached(priority: .userInitiated) {
             let sv: CaptureSurvey?
             switch s {
@@ -671,6 +756,10 @@ struct NewProjectSheet: View {
             }
             if sv.withLocation > 0 {
                 SettingRow(id: "source.useLocation") { Toggle("", isOn: $options.photos.keepLocation).labelsHidden() }
+                if sv.isDrone || aerial {
+                    SettingRow(id: "source.skipTakeoff") { Toggle("", isOn: $options.photos.skipTakeoff).labelsHidden() }
+                        .disabled(!options.photos.keepLocation)
+                }
                 Text("\(sv.withLocation) of the \(sv.sampled) photos checked have a location. "
                      + (solverKind == .learned ? "Learned camera solving uses them to check the cameras and put the scene in metres."
                         : "Only learned camera solving uses them (Camera solver on the next page); Object Capture ignores them."))
@@ -683,7 +772,7 @@ struct NewProjectSheet: View {
     /// Per-source defaults, the same whichever way the source was chosen (welcome tiles, Open, drop, Change…):
     /// outdoor-capable sources find the sky (learned skybox); captures, COLMAP and Nerfstudio don't.
     static func applySourceDefaults(_ s: SourceDescription, to o: inout PrepOptions) {
-        switch s { case .video, .video360, .photos, .photoFiles, .photos360: o.masking.sky = true; default: o.masking.sky = false }
+        switch s { case .video, .video360, .photos, .photoFiles, .photos360, .homeVideo: o.masking.sky = true; default: o.masking.sky = false }
     }
 
     private func choose(dir: Bool, files: Bool = false, make: @escaping (URL) -> SourceDescription) {
@@ -706,6 +795,7 @@ struct NewProjectSheet: View {
         switch s {
         case .photos, .photoFiles: return "Photos"
         case .video: return "Video"
+        case .homeVideo: return "Home video (VHS, camcorder tape)"
         case .video360: return "360° video"
         case .photos360: return "360° photos"
         case .stereoVideo: return "Stereo footage"
@@ -719,6 +809,7 @@ struct NewProjectSheet: View {
         switch source {
         case .photos, .photoFiles: return "photo.stack"
         case .video: return "video"
+        case .homeVideo: return "film.stack"
         case .video360, .photos360: return "globe"
         case .stereoVideo: return "eyeglasses"
         case .captureBundle: return "iphone.gen3"

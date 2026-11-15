@@ -337,6 +337,13 @@ DatasetInfo parseDataset(const std::string& dir) {
             if (!c["depth"].is_string()) throw DatasetError(label + ": depth must be a path");
             cam.depth = c["depth"].get<std::string>();
             ds.resolve(cam.depth);
+            auto dim = [&](const char* k) -> int {
+                if (!c.contains(k) || !c[k].is_number_integer() || c[k].get<int64_t>() <= 0 || c[k].get<int64_t>() > 1000000)
+                    throw DatasetError(label + ": depthWidth/depthHeight required with depth");
+                return int(c[k].get<int64_t>());
+            };
+            cam.depthWidth = dim("depthWidth");
+            cam.depthHeight = dim("depthHeight");
         }
         for (const char* key : {"mask", "sky"}) {
             if (c.contains(key) && !c[key].is_null()) {
@@ -455,6 +462,11 @@ View loadView(const DatasetInfo& ds, const CameraInfo& cam, int maxSize) {
         if (m.w != nw || m.h != nh) m.px = resample(m.px, m.w, m.h, 1, nw, nh, Filter::Bilinear);
         v.mask = std::move(m.px);
         if (std::all_of(v.mask.begin(), v.mask.end(), [](uint8_t a) { return a == 255; })) v.mask.clear();
+    }
+    if (!cam.sky.empty() && fs::is_regular_file(ds.resolve(cam.sky))) {
+        Decoded m = decode(ds.resolve(cam.sky), 1);
+        if (m.w != nw || m.h != nh) m.px = resample(m.px, m.w, m.h, 1, nw, nh, Filter::Bilinear);
+        v.sky = std::move(m.px);
     }
     v.fx = cam.fx * nw / double(cam.width);
     v.fy = cam.fy * nh / double(cam.height);

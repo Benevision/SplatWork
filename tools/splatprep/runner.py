@@ -12,12 +12,19 @@ Extra (optional) request keys understood here, beyond §6:
 * ``allowMatchingOnly`` — sfm without a mapper returns matching stats + ``matches.npz``
   instead of failing (used by the benchmark).
 * ``device``          — "auto" | "cuda" | "mps" | "cpu".
+* ``vhs``             — task = frames: old home video (VHS …) restoration and clips instead of plain frame
+  extraction (see vhs.py); ``{"analyseOnly": true}`` only finds the clips.
+* ``cameraGroups``    — sfm: {image name: group}; images of one group share a camera (VHS clips).
+* ``clipTravel``      — sfm with cameraGroups: {clip id: camera travel from vhs.json}; clips the solve glued onto
+  another clip (cameras on one spot) or gave an impossible zoom are left out (``vhs.check_clips``).
 * ``datasets`` / ``models`` — task = benchmark (see benchmark.py).
 * mask keys (task = masks / maskpreview) — ``maskPrompts``, ``maskClasses``, ``maskThreshold``,
   ``dilatePixels``, ``replaceMasks``, ... (see masks/prompts.py and README).
 """
 
 from __future__ import annotations
+
+import json
 
 import shutil
 import time
@@ -71,7 +78,7 @@ def normalize_request(request: dict) -> dict:
         raise RequestError(f"unknown task: {task!r} (expected sfm | masks | benchmark | maskpreview | frames)")
     if task == "frames" and not req.get("video"):
         raise RequestError("task frames needs 'video'")
-    if task == "sfm" and req["matching"] not in ("sequential", "exhaustive", "retrieval", "auto"):
+    if task == "sfm" and req["matching"] not in ("sequential", "exhaustive", "retrieval", "spatial", "auto"):
         raise RequestError(f"unknown matching: {req['matching']!r}")
     if task == "sfm" and req["mapper"] not in ("glomap", "colmap", "pycolmap", "auto"):
         raise RequestError(f"unknown mapper: {req['mapper']!r}")
@@ -145,6 +152,15 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
             raise RequestError(f"priorPoses not found: {req['priorPoses']}")
         priors = match_priors(load_priors(ppath), names)
     sp = StagedProgress(progress, SFM_STAGES)
+    skipped_takeoff = []
+    if not priors and req.get("skipTakeoff", True):
+        from .gps import takeoff_shots
+
+        drop, thr = takeoff_shots([image_dir / n for n in names])
+        if drop and len(drop) < 0.3 * len(names):
+            skipped_takeoff = [n for i, n in enumerate(names) if i in drop]
+            names = [n for i, n in enumerate(names) if i not in drop]
+            sp.message("pairs", f"left out {len(skipped_takeoff)} take-off / landing photo(s) below {thr:.0f} m above take-off")
     device = select_device(req.get("device"))
     sp.message("pairs", f"{model_id}: {len(names)} images, device {device}")
     ctx = SfMContext(
@@ -162,6 +178,8 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
     )
     result = backend.run(ctx)
     stats: dict = {"task": "sfm", "model": model_id, "device": device, "numImages": len(names), **result.info}
+    if skipped_takeoff:
+        stats["skippedTakeoff"] = skipped_takeoff
     if result.reconstruction is None:
         if result.matching is not None:
             result.matching.save(out_dir / "matches.npz")
@@ -178,6 +196,27 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         sp.update("alignment", 0.1, "aligning to prior poses (Sim3)")
         stats["priorAlignment"] = align_to_priors(rec, priors)
         stats["numPriors"] = len(priors)
+    if req.get("cameraGroups") and req.get("clipTravel"):
+        # home video: a clip glued onto another clip's geometry is left out (vhs.check_clips)
+        from .vhs import check_clips
+
+        centers = {im.name: im.center() for im in rec.images.values()}
+        fxw = {im.name: rec.cameras[im.camera_id].pinhole()[0] / max(1, rec.cameras[im.camera_id].width)
+               for im in rec.images.values()}
+        groups = {str(k).split("/")[-1]: int(v) for k, v in req["cameraGroups"].items()}
+        drop, report = check_clips(centers, fxw, {im.name: groups[im.name.split("/")[-1]]
+                                                  for im in rec.images.values() if im.name.split("/")[-1] in groups},
+                                   {int(k): float(v) for k, v in req["clipTravel"].items()})
+        stats["clipCheck"] = report
+        if drop:
+            gone = set(drop)
+            for iid in [i for i, im in rec.images.items() if im.name in gone]:
+                del rec.images[iid]
+            stats["numRegistered"] = len(rec.images)
+            stats["registeredPct"] = round(100.0 * len(rec.images) / len(names), 2)
+        for r in report:
+            if not r["kept"]:
+                sp.message("alignment", f"clip {r['clip'] + 1} left out: {r['reason']}")
     known_up = None
     if not priors and req.get("gpsCheck", True):
         from .gps import check_against_gps
@@ -217,6 +256,9 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         masks_dir=_resolve(workdir, req.get("masksDir")),
     )
     stats.update({"export": exp, "status": "ok"})
+    if "gpsCheck" in stats:   # for callers that only see the output folder (a worker's whole-pipeline job)
+        (out_dir / "gps_check.json").write_text(json.dumps({k: v for k, v in stats["gpsCheck"].items()
+                                                            if k not in ("outliers", "worst")}, indent=1))
     if not req.get("keepWork", False):
         shutil.rmtree(work, ignore_errors=True)
     return stats
@@ -257,6 +299,15 @@ def run_frames_task(req: dict, workdir: Path, progress: ProgressFn) -> dict:
             right = _resolve(workdir, stereo["rightVideo"])
             if not right.is_file():
                 raise RequestError(f"right-eye video not found: {stereo['rightVideo']}")
+    if req.get("vhs") is not None:
+        if not isinstance(req["vhs"], dict):
+            raise RequestError("vhs must be an object")
+        from .vhs import prepare
+
+        stage = "analysing old home video" if req["vhs"].get("analyseOnly") else "restoring old home video"
+        sp = StagedProgress(progress, [(stage, 1.0)])
+        info = prepare(video, out_dir, req.get("videoOptions") or {}, req["vhs"], sp.sub(stage), lambda m: sp.message(stage, m))
+        return {"task": "frames", "device": "cpu", "status": "ok", **info}
     stage = ("splitting 360° video" if req.get("equirect") else
              "extracting stereo frames" if stereo is not None else "extracting frames")
     sp = StagedProgress(progress, [(stage, 1.0)])

@@ -114,6 +114,22 @@ enum CLI {
             } catch { print("error: \(error.localizedDescription)") }
             exit(0)
         }
+        // --upload <folder> --worker <url> [--upload-quality standard|compact|original]: batched, resumable upload test
+        if let up = value("--upload"), let w = value("--worker"), let u = URL(string: w) {
+            let q = value("--upload-quality").flatMap(UploadQuality.init) ?? .current
+            let client = WorkerClient(baseURL: u, token: value("--token"))
+            let t0 = Date()
+            Task.detached {
+                do {
+                    let id = try await client.uploadDataset(directory: URL(fileURLWithPath: up), quality: q) { f in
+                        print(String(format: "  upload %.0f %%  (%.0f s)", f * 100, Date().timeIntervalSince(t0))); fflush(stdout)
+                    }
+                    print("uploaded as dataset \(id) in \(String(format: "%.1f", Date().timeIntervalSince(t0))) s")
+                    exit(0)
+                } catch { print("upload failed: \(error.localizedDescription)"); exit(1) }
+            }
+            dispatchMain()
+        }
         if let ds = value("--train") {
             do {
                 let dataset = try PreparedDataset.load(URL(fileURLWithPath: ds))
@@ -127,6 +143,11 @@ enum CLI {
                 }
                 if let it = value("--iterations").flatMap(Int.init) { cfg.iterations = it; cfg.densifyStop = min(cfg.densifyStop, Int(Double(it) * 0.8)) }
                 if !dataset.hasDepth { cfg.depthWeight = 0 }
+                // home video datasets get the tape settings (as in the app) unless --config / --no-home-video-preset
+                if HomeVideoIngest.isHomeVideoDataset(dataset.root), value("--config") == nil, !a.contains("--no-home-video-preset") {
+                    cfg = HomeVideoIngest.adjustTraining(cfg)
+                    print("home video: SH degree \(cfg.shDegree), transient masking on")
+                }
                 let out = URL(fileURLWithPath: value("--out") ?? "trained.ply")
                 if let k = value("--blocks").flatMap(Int.init) {
                     // Block-parallel run (the app's Both mode): this Mac (unless --no-local) and --worker URL.
@@ -207,12 +228,40 @@ enum CLI {
             print("sampled \(s.sampled), with location \(s.withLocation), drone: \(s.drone ?? "no")")
             exit(0)
         }
+        if let src = value("--home-video-clips") {
+            // The clips of an old home video and what each is good for: SplatStudio --home-video-clips <video>
+            let sem = DispatchSemaphore(value: 0)
+            var code: Int32 = 0
+            Task.detached {
+                do {
+                    let (a, dir) = try await HomeVideoIngest.analyse(video: URL(fileURLWithPath: src)) { p in
+                        if !p.message.isEmpty { print("  \(p.message)"); fflush(stdout) }
+                    }
+                    print("\(a.width)×\(a.height), \(a.summary), recommended clip \(a.recommended.map(String.init) ?? "none") (analysis in \(dir.path))")
+                    for c in a.clips where c.offerable {
+                        print(String(format: "  clip %2d  %7.1f–%7.1f s  %-28@ parallax %5.1f %%  travel %5.2f%@", c.id, c.start, c.end,
+                                     c.verdictTitle as NSString, c.parallax ?? 0, c.cameraTravel ?? 0, c.zooms == true ? "  zooms" : ""))
+                    }
+                } catch { fputs("error: \(error.localizedDescription)\n", stderr); code = 1 }
+                sem.signal()
+            }
+            sem.wait()
+            exit(code)
+        }
         if let src = value("--prepare") {
             // Headless dataset preparation: SplatStudio --prepare <photos dir | video | capture> --out <project dir>
             //   [--solver auto|objectcapture|capture|<splatprep feature id>] [--mask none|people|dynamic]
             let out = URL(fileURLWithPath: value("--out") ?? "project")
-            guard let source = SourceDescription.guess(URL(fileURLWithPath: src)) else { fputs("error: unrecognised source\n", stderr); exit(1) }
+            guard var source = SourceDescription.guess(URL(fileURLWithPath: src)) else { fputs("error: unrecognised source\n", stderr); exit(1) }
             var o = PrepOptions()
+            // [--home-video] old tape footage (also when the name says VHS / Hi8 / …); [--plain-video] forces the ordinary
+            // video path; [--clips 1,4,5] picks clips (ids from vhs.json); [--frames N] frames over all clips.
+            if a.contains("--home-video"), case .video(let u) = source { source = .homeVideo(u) }
+            if a.contains("--plain-video"), case .homeVideo(let u) = source { source = .video(u) }
+            if let c = value("--clips") { o.homeVideo.clips = c.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) } }
+            if let n = value("--frames").flatMap(Int.init) { o.homeVideo.frameCount = n; o.video.targetFrameCount = n }
+            if let fps = value("--fps").flatMap(Double.init) { o.video.targetFPS = fps }
+            if let s = value("--start").flatMap(Double.init) { o.video.startTime = s }
             switch value("--solver") ?? "auto" {
             case "auto": o.poseSolver = .automatic
             case "objectcapture": o.poseSolver = .objectCapture
@@ -457,6 +506,9 @@ enum CLI {
                     print("auto clean removed \(plan.remove.filter { $0 }.count) splats (\(plan.unseenCount) unseen, \(plan.outsideCount) outside box)")
                 }
                 let r = try t.evaluate(cloud: g, saveRendersTo: value("--save-renders").map { URL(fileURLWithPath: $0) })
+                if ProcessInfo.processInfo.environment["SPLAT_CC_LOG"] != nil, let b = try t.uncorrectedBrightness() {
+                    print(String(format: "uncorrected brightness vs photos: %.2f (the colour safeguard acts below %.2f)", b, MetalTrainer.ccDarkRatio))
+                }
                 print(String(format: "eval %@: %d splats, SH %d, antialiased %@ → held-out PSNR %.2f dB over %d views (min %.2f, max %.2f)",
                              (f as NSString).lastPathComponent, g.count, cfg.shDegree, cfg.antialiased ? "yes" : "no", r.mean, r.perView.count,
                              r.perView.min() ?? 0, r.perView.max() ?? 0))

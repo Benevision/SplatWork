@@ -147,6 +147,7 @@ std::map<std::string, Field> fieldMap(TrainConfig& c) {
         {"bilateralGrid", {Field::Bool, &c.bilateralGrid}},
         {"bilateralGridLR", {Field::Float, &c.bilateralGridLR}},
         {"bilateralGridTV", {Field::Float, &c.bilateralGridTV}},
+        {"colourGuardStart", {Field::Int, &c.colourGuardStart}},
         {"progressiveResolution", {Field::Bool, &c.progressiveResolution}},
         {"decoupledSSIM", {Field::Bool, &c.decoupledSSIM}},
         {"backgroundShell", {Field::Int, &c.backgroundShell}},
@@ -247,6 +248,7 @@ void TrainConfig::validate() const {
     need(randomInitCount >= 1, "randomInitCount must be >= 1");
     need(previewInterval >= 0, "previewInterval must be >= 0 (0 disables previews)");
     need(evalInterval >= 0, "evalInterval must be >= 0 (0 disables eval)");
+    need(colourGuardStart >= 0, "colourGuardStart must be >= 0");
     const std::pair<const char*, double> pos[] = {{"lrPosition", lrPosition}, {"lrPositionFinal", lrPositionFinal},
         {"lrColor", lrColor}, {"lrSHRest", lrSHRest}, {"lrOpacity", lrOpacity}, {"lrScale", lrScale},
         {"lrRotation", lrRotation}, {"bilateralGridLR", bilateralGridLR}};
@@ -298,20 +300,10 @@ std::vector<std::string> unsupportedNotes(const TrainConfig& c, const FeatureCon
     auto note = [&](const std::string& what) {
         out.push_back(what + ": not supported by the Vulkan trainer yet; training without it");
     };
-    if (c.effectiveDepthWeight(f.hasDepth) > 0) note("depthWeight (depth supervision from the photos' depth maps)");
-    // trainer.py: the depth-normal loss runs with sensor depth, or with predicted depth when depthPriors allows it
-    bool priors = !f.hasDepth && c.normalWeight > 0 && (c.depthPriors == "auto" || c.depthPriors == "on");
-    if (c.normalWeight > 0 && (f.hasDepth || priors))
-        note("normalWeight (depth-normal consistency loss" + std::string(priors ? ", with predicted depth priors)" : ")"));
-    if (priors && c.monoDepthWeight > 0) note("monoDepthWeight (depth loss on predicted depth maps)");
-    if (priors && c.priorInitPoints > 0) note("priorInitPoints (starting points from predicted depth)");
-    if (c.transientMasking) note("transientMasking (ignoring moving objects)");
-    if (c.bilateralGrid) note("bilateralGrid (per-photo local colour correction)");
-    else if (c.appearanceCorrection && !f.exposureLocked) note("appearanceCorrection (per-photo colour correction)");
-    if (c.decoupledSSIM && (c.bilateralGrid || (c.appearanceCorrection && !f.exposureLocked))) note("decoupledSSIM");
-    if (c.poseRefinement) note("poseRefinement (per-photo camera pose refinement)");
-    if (c.skybox == "on" || (c.skybox == "auto" && f.hasSky)) note("skybox (learned sky at infinity)");
-    if (c.optimizerPrecision == "compact") note("optimizerPrecision=compact (reduced-precision Adam moments; fp32 is used)");
+    // Stage 2b implements every feature; depth priors are used when cached (trainer.cpp logs when they are missing).
+    (void)c;
+    (void)f;
+    (void)note;
     return out;
 }
 

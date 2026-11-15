@@ -149,7 +149,7 @@ class RuntimeState:
         if self.can_train:
             parts = [f"PyTorch {v.get('torch') or '?'}", f"gsplat {v.get('gsplat') or '?'}"]
         else:
-            parts = ["processing only (no training)"]
+            parts = ["processing (training: the Vulkan trainer, when it finds a GPU)"]
         if self.with_splatprep:
             parts.append("splatprep" + (" + LightGlue" if self.with_lightglue else ""))
         return ", ".join(parts)

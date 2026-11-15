@@ -76,6 +76,7 @@ enum RemotePipeline {
         r.imagesDir = "images"; r.outputDir = "sfm"
         r.cameraModel = o.sfmCameraModel
         r.resizeMax = o.maxImageSize
+        r.skipTakeoff = o.photos.skipTakeoff ? nil : false
         return (r, sequential)
     }
 
@@ -161,8 +162,9 @@ enum RemotePipeline {
             if case .video360 = source { req.equirect = o.equirect }
             spec.frames = .init(request: req)
             progress(PipelineProgress(stage: "Uploading to \(host)", fraction: 0.05, message: "the video, once — every step runs there"))
+            let rate = UploadRate(total: (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
             datasetId = try await worker.uploadFile(u, name: req.video!) { f in
-                uploadP(PipelineProgress(stage: "Uploading to \(host)", fraction: f, message: String(format: "video %.0f %%", f * 100)))
+                uploadP(PipelineProgress(stage: "Uploading to \(host)", fraction: f, message: rate.describe("video", f)))
             }
         } else {
             guard let frames else { throw PipelineError.noInput("no frames") }
@@ -181,8 +183,9 @@ enum RemotePipeline {
             var up = frames; up.root = staging
             try up.save()
             progress(PipelineProgress(stage: "Uploading to \(host)", fraction: 0.05, message: "\(frames.frames.count) frames, once — every step runs there"))
+            let rate = UploadRate(total: UploadRate.size(of: staging))
             datasetId = try await worker.uploadDataset(directory: staging) { f in
-                uploadP(PipelineProgress(stage: "Uploading to \(host)", fraction: f, message: String(format: "frames %.0f %%", f * 100)))
+                uploadP(PipelineProgress(stage: "Uploading to \(host)", fraction: f, message: rate.describe("\(frames.frames.count) photos", f)))
             }
         }
         let name = project.lastPathComponent
@@ -378,5 +381,40 @@ enum RemotePipeline {
         case .video(let u), .video360(let u): return u.path
         default: return nil
         }
+    }
+}
+
+
+/// "photos 38 % · 2.1 of 5.6 GB · 3.2 MB/s · about 12 min left" for an upload's progress callback.
+final class UploadRate: @unchecked Sendable {
+    let total: Int
+    private let start = Date()
+    private let lock = NSLock()
+    private var samples: [(Date, Double)] = []
+
+    init(total: Int) { self.total = total }
+
+    static func size(of dir: URL) -> Int {
+        guard let e = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { return 0 }
+        var n = 0
+        for case let u as URL in e {
+            if let v = try? u.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]), v.isRegularFile == true { n += v.fileSize ?? 0 }
+        }
+        return n
+    }
+
+    func describe(_ what: String, _ f: Double) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let now = Date()
+        samples.append((now, f)); samples.removeAll { now.timeIntervalSince($0.0) > 30 }
+        var parts = [String(format: "%@ %.0f %%", what, f * 100)]
+        guard total > 0 else { return parts[0] }
+        parts.append("\(formatBytes(Int(Double(total) * f))) of \(formatBytes(total))")
+        if let first = samples.first, now.timeIntervalSince(first.0) > 2, f > first.1 {
+            let bps = (f - first.1) * Double(total) / now.timeIntervalSince(first.0)
+            parts.append("\(formatBytes(Int(bps)))/s")
+            if bps > 0 { parts.append("about \(formatDuration((1 - f) * Double(total) / bps)) left") }
+        }
+        return parts.joined(separator: " · ")
     }
 }

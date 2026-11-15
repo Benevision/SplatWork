@@ -22,6 +22,17 @@ GPS_OK_REL = 0.05
 #: The solve is trusted when at most this share of cameras disagree. A percentile would miss a whole
 #: misplaced flight layer (the robust fit aligns the majority; one layer of a 3-layer survey is < 10 %).
 GPS_MAX_BAD_FRACTION = 0.02
+#: … or, when the solve as a whole matches GPS (median error under this share of the limit), up to this share may
+#: disagree: those few cameras (take-off shots of the horizon, a stray pass) are left out instead of failing the run.
+#: A folded or doubled solve has a large median error and still fails.
+GPS_GOOD_MEDIAN_SHARE = 0.25
+GPS_MAX_OUTLIER_FRACTION = 0.15
+
+#: Take-off and landing shots: a drone photo taken below this height above take-off (metres, or this share of the
+#: flight's median height, whichever is larger) is left out before the solve when most photos are well above it.
+TAKEOFF_MIN_M = 5.0
+TAKEOFF_SHARE = 0.3
+TAKEOFF_MIN_FLIGHT_M = 15.0
 
 
 def _dms(v) -> float:
@@ -66,6 +77,53 @@ def to_enu(gps: np.ndarray) -> np.ndarray:
                      (gps[:, 0] - lat0) * 110540.0, gps[:, 2] - gps[:, 2].mean()], 1)
 
 
+def relative_altitude(path: Path) -> Optional[float]:
+    """A drone photo's height above its take-off point (DJI's XMP RelativeAltitude), or None."""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            xmp = im.info.get("xmp", b"") or b""
+    except Exception:
+        return None
+    if isinstance(xmp, str):
+        xmp = xmp.encode()
+    m = re.search(rb'RelativeAltitude="([-+0-9.]+)"', xmp) or re.search(rb'RelativeAltitude>\s*([-+0-9.]+)\s*<', xmp)
+    return float(m.group(1)) if m else None
+
+
+def takeoff_shots(paths: Sequence[Path]) -> Tuple[set, float]:
+    """Indices of take-off / landing shots in a drone flight (photos near the ground while most are well above it),
+    and the threshold used. Empty when the photos have no height above take-off or the flight is low."""
+    alts = [relative_altitude(Path(p)) for p in paths]
+    have = [a for a in alts if a is not None]
+    if len(have) < 0.8 * max(len(alts), 1) or not have:
+        return set(), 0.0
+    med = float(np.median(have))
+    if med < TAKEOFF_MIN_FLIGHT_M:
+        return set(), 0.0
+    thr = max(TAKEOFF_MIN_M, TAKEOFF_SHARE * med)
+    return {i for i, a in enumerate(alts) if a is not None and a < thr}, thr
+
+
+def gps_positions(paths: Sequence[Path], min_fraction: float = 0.9, min_extent_m: float = 5.0) -> Optional[np.ndarray]:
+    """East/north/up metres for every image when nearly all of them carry GPS and the positions spread out
+    (a survey, not a handheld spot); images without GPS get the mean position. None otherwise."""
+    paths = list(paths)
+    if len(paths) < 2:
+        return None
+    gps = [read_gps(Path(p)) for p in paths]
+    have = [g is not None for g in gps]
+    if sum(have) < min_fraction * len(paths):
+        return None
+    enu = to_enu(np.array([g for g in gps if g is not None]))
+    if float(np.linalg.norm(np.ptp(enu, 0))) < min_extent_m:
+        return None
+    out = np.repeat(enu.mean(0, keepdims=True), len(paths), 0)
+    out[np.array(have)] = enu
+    return out
+
+
 def check_against_gps(rec, image_dir: Path, names: Sequence[str]) -> Optional[Dict]:
     """Fit solved centres to GPS. Returns stats (and the Sim3 when trustworthy) or None without enough GPS."""
     from .geometry import robust_umeyama
@@ -95,7 +153,9 @@ def check_against_gps(rec, image_dir: Path, names: Sequence[str]) -> Optional[Di
     bad = float((res > limit).mean())
     out = {"numGps": len(used), "extentM": round(extent, 1), "medianM": round(float(np.median(res)), 2),
            "p90M": round(p90, 2), "maxM": round(float(res.max()), 1), "limitM": round(limit, 1),
-           "badFraction": round(bad, 4), "ok": bad <= GPS_MAX_BAD_FRACTION}
+           "badFraction": round(bad, 4),
+           "ok": bad <= GPS_MAX_BAD_FRACTION or (float(np.median(res)) <= GPS_GOOD_MEDIAN_SHARE * limit
+                                                  and bad <= GPS_MAX_OUTLIER_FRACTION)}
     out["outliers"] = [used[i] for i in np.nonzero(res > limit)[0]]
     worst = np.argsort(-res)[:5]
     out["worst"] = [[used[i], round(float(res[i]), 1)] for i in worst]

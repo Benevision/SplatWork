@@ -9,6 +9,8 @@ enum SourceDescription: Codable, Hashable, Sendable {
     case photoFiles([URL])
     /// A regular (monoscopic) video.
     case video(URL)
+    /// An old home video (VHS, Video8, Hi8 … digitised): restored, split into clips, cameras per clip.
+    case homeVideo(URL)
     /// A 360° equirectangular video.
     case video360(URL)
     /// A folder of 360° equirectangular photos.
@@ -24,7 +26,7 @@ enum SourceDescription: Codable, Hashable, Sendable {
 
     var displayName: String {
         switch self {
-        case .photos(let u), .photos360(let u), .video(let u), .video360(let u), .captureBundle(let u), .nerfstudio(let u): return u.lastPathComponent
+        case .photos(let u), .photos360(let u), .video(let u), .video360(let u), .homeVideo(let u), .captureBundle(let u), .nerfstudio(let u): return u.lastPathComponent
         case .photoFiles(let us): return "\(us.count) photos"
         case .stereoVideo(let l, _): return l.lastPathComponent
         case .colmap(let p, _): return p.lastPathComponent
@@ -48,6 +50,7 @@ enum SourceDescription: Codable, Hashable, Sendable {
             let n = url.lastPathComponent.lowercased()
             if n.contains("360") || n.contains("equirect") || ext == "insv" { return .video360(url) }
             if n.contains("sbs") || n.contains("stereo") || n.contains("spatial") || n.contains("arcturus") { return .stereoVideo(left: url, right: nil) }
+            if HomeVideoIngest.looksLikeHomeVideo(url) { return .homeVideo(url) }
             return .video(url)
         }
         var isDir: ObjCBool = false
@@ -79,6 +82,8 @@ struct PrepOptions: Codable, Hashable, Sendable {
     var equirect: Equirect360Options = .init()
     /// Stereo layout, rig baseline / calibration, stereo depth.
     var stereo: StereoOptions = .init()
+    /// Old home video: which clips, how many frames, restoration steps.
+    var homeVideo: HomeVideoOptions = .init()
     /// Capture-bundle import (depth, confidence, point cloud, tracking filters).
     var capture: CaptureImportOptions = .init()
     /// COLMAP / Nerfstudio import (undistortion, resizing).
@@ -120,6 +125,7 @@ struct PrepOptions: Codable, Hashable, Sendable {
         self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
         photos = c(.photos, photos); video = c(.video, video); equirect = c(.equirect, equirect); stereo = c(.stereo, stereo)
+        homeVideo = c(.homeVideo, homeVideo)
         capture = c(.capture, capture); importing = c(.importing, importing); poseSolver = c(.poseSolver, poseSolver)
         objectCaptureHighSensitivity = c(.objectCaptureHighSensitivity, objectCaptureHighSensitivity)
         sfmCameraModel = c(.sfmCameraModel, sfmCameraModel); masking = c(.masking, masking)
@@ -325,6 +331,9 @@ enum DatasetBuilder {
                 else { frames = try await Equirect360.extract(video: u, video: o.video, options: o.equirect, into: dir, progress: ingestP) }
                 stamp?.save(dir)
             }
+        case .homeVideo(let u):
+            frames = try await HomeVideoIngest.ingest(video: u, options: o.homeVideo, into: dir, worker: worker,
+                                                      onWorker: o.videoOnWorker && o.compute != .thisMac, progress: ingestP)
         case .photos360(let folder):
             frames = try await Equirect360.extract(photos: PhotoIngest.listImages(in: folder, recursive: false), options: o.equirect,
                                                    encoding: o.photos.encoding, into: dir, progress: ingestP)
@@ -368,6 +377,7 @@ enum DatasetBuilder {
                 + (o.masking.model != .none ? "Masks may be hiding most of each photo — try without masks. " : "")
                 + "Try another camera solver, or capture with more overlap between photos.")
         }
+        try checkAgainstGPS(sol)
         var ds = try PoseAssembly.makeDataset(frames: frames, solution: sol, holdoutInterval: o.holdoutInterval)
         if !o.keepIntermediates {
             try? fm.removeItem(at: dir.appendingPathComponent(".oc-input"))
@@ -377,6 +387,20 @@ enum DatasetBuilder {
         try ds.save()
         try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) of \(frames.frames.count) frames placed")
         return finish(ds, progress)
+    }
+
+    /// splatprep compares the solved cameras with the photos' GPS. When many are far off, the solve has folded or
+    /// doubled the scene (look-alike buildings matched to each other): training on it wastes hours and gives a
+    /// ghosted result, so stop here and say what to do. Photos without GPS (or with "Use photo locations" off)
+    /// have no check and are unaffected.
+    static func checkAgainstGPS(_ sol: PoseSolution) throws {
+        guard let chk = sol.stats["gpsCheck"]?.object, chk["ok"]?.bool == false else { return }
+        let bad = Int(((chk["badFraction"]?.double ?? 0) * 100).rounded())
+        let median = Int((chk["medianM"]?.double ?? 0).rounded()), extent = Int((chk["extentM"]?.double ?? 0).rounded())
+        throw PipelineError.processFailed(
+            "The solved cameras don't match the photos' GPS: \(bad) % of them are far from their GPS position "
+            + "(typically \(median) m off, over a \(extent) m flight), so the scene would come out folded or doubled. "
+            + "Redo from Cameras to solve again, or turn off Use photo locations to keep this solve anyway.")
     }
 
     /// Finding the sky needs the Models pack or a worker. Without either it is skipped with a note instead of
@@ -421,7 +445,15 @@ enum DatasetBuilder {
                                        message: "fisheye footage: solving with a fisheye camera model and undistorting"))
         }
         if choice == .automatic || choice == .fromCapture {
-            if frames.isMultiViewRig {
+            if frames.frames.contains(where: { $0.cameraGroup != nil }) {
+                // Home video. One clip with one lens setting: Object Capture — on the test tape's best clip it placed
+                // 72 of 75 restored frames in 31 s and trained to 19.56 dB held-out, against 18.89 dB for learned SfM
+                // (4 min) (docs/dev/VHS.md §3). Several clips or zoom settings need a camera per group, which only
+                // splatprep takes; "auto" matching adds the retrieval pairs that join clips of the same place.
+                let groups = Set(frames.frames.compactMap(\.cameraGroup))
+                choice = groups.count == 1 && ObjectCapturePoseSolver.isSupported ? .objectCapture
+                    : .splatprep(featureModelId: "superpoint_lightglue", matching: "auto", mapper: "auto")
+            } else if frames.isMultiViewRig {
                 // 360° footage: Object Capture is built for photographing one object and placed only 1,041 of
                 // 9,824 views of a 360 walk-through. Learned SfM (on the worker when one is in use) handles it;
                 // retrieval matching, because a frame's views are interleaved in file order.
@@ -443,6 +475,7 @@ enum DatasetBuilder {
             var sp = SplatPrepPoseSolver(features: feat, matching: matching, mapper: mapper, cameraModel: cameraModel)
             sp.priorPoses = priors
             sp.resizeMax = o.maxImageSize
+            sp.skipTakeoff = o.photos.skipTakeoff ? nil : false
             if o.compute != .thisMac, let worker {
                 sol = try await RemoteSplatPrepPoseSolver(client: worker, local: sp).solve(frames, progress: progress)
             } else {

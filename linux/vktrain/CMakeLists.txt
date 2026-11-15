@@ -19,12 +19,14 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 find_package(Vulkan REQUIRED)
-find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
+find_program(GLSLANG_VALIDATOR NAMES glslangValidator glslang REQUIRED)
 
 set(KERNELS preprocess preprocess_bwd radix_hist radix_scatter scan_block scan_add gather_counts duplicate_keys
             tile_ranges raster_fwd raster_bwd ssim_prep blur ssim_terms loss_grad adam atomic_probe
-            reg_grad grad_stats mcmc_noise)
-set(ATOMIC_KERNELS raster_bwd ssim_terms atomic_probe)
+            reg_grad grad_stats mcmc_noise
+            sky_composite sky_backward corr_apply corr_backward transient_hist transient_thresh transient_weights
+            depth_normal depth_gather adam_bf16 adam_sh8)
+set(ATOMIC_KERNELS raster_bwd ssim_terms atomic_probe preprocess_bwd sky_backward corr_backward depth_normal)
 
 set(SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spv)
 file(MAKE_DIRECTORY ${SPV_DIR})
@@ -81,7 +83,7 @@ bool hasNativeVariant(const char* name) {
 
 add_library(vktrain_core STATIC
   src/vk.cpp src/gpu_splat.cpp src/cpu_ref.cpp src/config.cpp src/dataset.cpp src/plyio.cpp src/strategy.cpp
-  src/trainer.cpp ${SPV_DIR}/shaders_registry.cpp ${SPV_HEADERS})
+  src/trainer.cpp src/models.cpp src/compact.cpp ${SPV_DIR}/shaders_registry.cpp ${SPV_HEADERS})
 target_include_directories(vktrain_core PUBLIC src PRIVATE ${SPV_DIR})
 target_include_directories(vktrain_core SYSTEM PUBLIC third_party)
 find_package(Threads REQUIRED)
@@ -91,11 +93,20 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vktrain_core PRIVATE -Wall -Wextra)
 endif()
 
+# The worker (splatworker/vktrain.py) checks this before it uses the program: bump it when the command line,
+# the JSON lines or the job-dir files change in a way an older worker can't read.
+set(VKTRAIN_INTERFACE 1)
 add_executable(splatwork-vk-train src/main.cpp)
 target_link_libraries(splatwork-vk-train PRIVATE vktrain_core)
+target_compile_definitions(splatwork-vk-train PRIVATE VKTRAIN_INTERFACE=${VKTRAIN_INTERFACE})
 
-add_executable(vktrain-selftest src/selftest.cpp)
-target_link_libraries(vktrain-selftest PRIVATE vktrain_core)
+include(GNUInstallDirs)
+install(TARGETS splatwork-vk-train RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-enable_testing()
-add_test(NAME vktrain-selftest COMMAND vktrain-selftest)
+option(VKTRAIN_SELFTEST "build vktrain-selftest (kernels against the CPU reference)" ON)
+if(VKTRAIN_SELFTEST)
+  add_executable(vktrain-selftest src/selftest.cpp)
+  target_link_libraries(vktrain-selftest PRIVATE vktrain_core)
+  enable_testing()
+  add_test(NAME vktrain-selftest COMMAND vktrain-selftest)
+endif()

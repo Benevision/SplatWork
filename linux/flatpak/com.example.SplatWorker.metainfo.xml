@@ -81,6 +81,39 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.3" date="2026-11-15">
+      <description>
+        <p>Every graphics card can train with the Vulkan trainer.</p>
+        <ul>
+          <li>With the Vulkan trainer chosen, each GPU trains its own job, so a computer with two GPUs trains two jobs at once.</li>
+          <li>Settings → GPUs lists AMD, Intel and integrated GPUs too. An integrated GPU next to a faster card starts unticked; when ticked it only takes a job on its own while the faster GPUs are busy.</li>
+          <li>Measure GPU speed (Settings → GPUs) trains a small scene on each GPU; a GPU under a quarter of the fastest one's speed is kept out of the way.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.2" date="2026-11-15">
+      <description>
+        <p>Large uploads from the Mac no longer fail when they are combined on this computer.</p>
+      </description>
+    </release>
+    <release version="1.7.1" date="2026-11-15">
+      <description>
+        <p>Training no longer lets per-photo colour correction take over a scene's colour.</p>
+        <ul>
+          <li>With per-photo local colour correction on, training checks that the scene still has its own colours. If the scene gets worse or darker without the correction, the correction is reset; if that happens again, it is turned off for the rest of the run, and the job log says to check the camera solve.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.0" date="2026-11-15">
+      <description>
+        <p>Experimental training on AMD and Intel graphics cards.</p>
+        <ul>
+          <li>A new built-in Vulkan trainer trains on AMD and Intel cards without downloading PyTorch or CUDA. NVIDIA cards keep the gsplat trainer; the Vulkan trainer can be chosen in Settings.</li>
+          <li>It supports the same training settings as the NVIDIA trainer, including skybox, colour correction, depth and normal losses, pause and resume.</li>
+          <li>Experimental: it has not yet been compared with the NVIDIA trainer on real graphics cards.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.6.0" date="2026-11-13">
       <description>
         <p>AMD and Intel graphics cards are recognised, and a whole project can run on this computer as one job.</p>

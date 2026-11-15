@@ -46,6 +46,13 @@ class DriverInfo:
     # every graphics card from sysfs (gpu_vendors.Adapter), NVIDIA or not, and AMD's compute device /dev/kfd
     adapters: list = field(default_factory=list)
     kfd: bool = False
+    # the Vulkan trainer's device (vktrain.device_info()) when it can train on the AMD / Intel card, else None
+    vulkan: Optional[dict] = None
+
+    @property
+    def vulkan_trains(self) -> bool:
+        """No usable NVIDIA GPU, but the Vulkan trainer found the AMD / Intel card (training works, experimental)."""
+        return self.vulkan is not None and not self.has_gpu and self.other_gpu is not None
 
     @property
     def has_gpu(self) -> bool:
@@ -66,6 +73,13 @@ class DriverInfo:
         if self.has_gpu:
             return None
         other = self.other_gpu
+        if other is not None and self.vulkan_trains:
+            how = {"amd": "PyTorch for ROCm", "intel": "PyTorch for Intel GPUs (XPU)"}[other.vendor]
+            return (f"{other.name} found",
+                    f"{PRODUCT_NAME} trains on this card with its built-in Vulkan trainer, which needs no extra "
+                    "download. It is experimental: it hasn't been compared with the NVIDIA (gsplat) trainer on real "
+                    "GPUs yet. The processing runtime adds dataset preparation (feature matching, camera solving, "
+                    f"masks) on this GPU through {how} where it can, and on the CPU otherwise.")
         if other is not None:
             how = {"amd": "PyTorch for ROCm", "intel": "PyTorch for Intel GPUs (XPU)"}[other.vendor]
             return (f"{other.name} found",
@@ -257,8 +271,9 @@ def _detect_smi(exe: str, run: Callable[..., Any]) -> DriverInfo:
 def detect(nvml: Any = "auto", run: Callable[..., Any] = subprocess.run,
            smi: Optional[str] = "auto", proc_file: Path = Path("/proc/driver/nvidia/version"),
            dev_glob: str = "/dev/nvidia[0-9]*", flatpak: Optional[bool] = None,
-           sys_root: Path = Path("/sys"), dev_root: Path = Path("/dev")) -> DriverInfo:
-    """Detect the driver and GPUs. Never raises."""
+           sys_root: Path = Path("/sys"), dev_root: Path = Path("/dev"), vulkan_probe: bool = True) -> DriverInfo:
+    """Detect the driver and GPUs. Never raises. ``vulkan_probe``: without a usable NVIDIA GPU, ask the Vulkan
+    trainer (``splatwork-vk-train --info``) whether it can train on the AMD / Intel card."""
     from .paths import in_flatpak
 
     if nvml == "auto":
@@ -302,6 +317,14 @@ def detect(nvml: Any = "auto", run: Callable[..., Any] = subprocess.run,
         info.adapters, info.kfd = [], False
     if errors and not info.gpus:
         info.error = "; ".join(errors)
+    if vulkan_probe and not info.gpus and info.other_gpu is not None:
+        try:
+            from ..vktrain import device_info, usable
+
+            vi = device_info()
+            info.vulkan = vi if usable(vi) is None else None
+        except Exception:  # noqa: BLE001
+            info.vulkan = None
     return info
 
 

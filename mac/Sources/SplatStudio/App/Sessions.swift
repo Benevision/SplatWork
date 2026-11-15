@@ -197,6 +197,10 @@ final class TrainingSession {
         status = TrainerStatus(totalSteps: config.iterations)
         var cfg = config
         if !dataset.hasDepth { cfg.depthWeight = 0 }
+        if resume == nil, !customised, HomeVideoIngest.isHomeVideoDataset(dataset.root) {
+            cfg = HomeVideoIngest.adjustTraining(cfg)
+            remoteMessage = "Home video: colour detail limited to SH degree \(cfg.shDegree), and moving people and pets are left out while training."
+        }
         let name = dataset.root.deletingLastPathComponent().lastPathComponent
         let outDir = dataset.root.deletingLastPathComponent().appendingPathComponent("outputs", isDirectory: true)
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
@@ -781,6 +785,123 @@ final class PrepSession {
     }
     var phase: Phase { Phase.of(overall) }
 
+    // MARK: steps for the progress screen (finer than Phase: where the work is, and what it is)
+
+    enum Step: String, CaseIterable, Sendable {
+        case images, uploading, masks, sky, cameras, finalising, downloading
+        var title: String {
+            switch self {
+            case .images: return "Photos"
+            case .uploading: return "Upload"
+            case .masks: return "Masks"
+            case .sky: return "Sky"
+            case .cameras: return "Camera solve"
+            case .finalising: return "Finalise"
+            case .downloading: return "Download"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .images: return "photo.stack"
+            case .uploading: return "icloud.and.arrow.up"
+            case .masks: return "person.crop.rectangle"
+            case .sky: return "cloud.sun"
+            case .cameras: return "camera.viewfinder"
+            case .finalising: return "checkmark.seal"
+            case .downloading: return "icloud.and.arrow.down"
+            }
+        }
+        /// The step a progress line belongs to (nil: keep the current one, e.g. "Starting").
+        static func of(stage: String) -> Step? {
+            var t = stage.lowercased()
+            if t.hasPrefix("on "), let c = t.firstIndex(of: ":") { t = String(t[t.index(after: c)...]) }
+            if t.contains("upload") { return .uploading }
+            if t.contains("download") { return .downloading }
+            if t.contains("sky") { return .sky }
+            if t.contains("mask") || t.contains("fixed parts") { return .masks }
+            if t.contains("camera") || t.contains("pose") || t.contains("align") || t.contains("solv") { return .cameras }
+            if t.contains("finalis") || t.contains("level") { return .finalising }
+            if t.contains("frame") || t.contains("image") || t.contains("import") || t.contains("photo") || t.contains("video") { return .images }
+            return nil
+        }
+    }
+    struct StepSpan: Sendable { var step: Step; var start: Date; var end: Date? }
+    /// Steps in the order they ran, with their times.
+    private(set) var spans: [StepSpan] = []
+    var step: Step? { spans.last?.step }
+    /// Where the current step runs: a worker's address ("On 192.168.0.113: …", "Uploading to …"), or nil for this Mac.
+    private(set) var host: String? = nil
+
+    /// Camera-solve sub-steps, from splatprep's stage names in the progress messages.
+    static let solveSubsteps: [(title: String, keys: [String])] = [
+        ("Features", ["features", "extract"]), ("Pairs", ["pairs:", "pairs (", "selecting"]),
+        ("Matching", ["matching", "matched"]), ("Checking matches", ["verif"]),
+        ("Placing cameras", ["mapping", "registered", "mapper", "aligning images", "global", "incremental"]),
+        ("GPS check", ["alignment", "gps"]), ("Writing", ["export", "copied"]),
+    ]
+    private(set) var solveSubstep: Int = -1
+    var runStarted: Date? { startedAt }
+    private var counterSamples: [(Date, Int, Step)] = []
+    /// Items per second of the current step's counter ("matched 9866/14128"), over the last minute.
+    var counterRate: Double? {
+        guard let f = counterSamples.first, let l = counterSamples.last, l.0.timeIntervalSince(f.0) > 5, l.1 > f.1 else { return nil }
+        return Double(l.1 - f.1) / l.0.timeIntervalSince(f.0)
+    }
+    /// How long a step took (or has taken so far); several stretches of the same step are added up.
+    func duration(of step: Step) -> Double? {
+        let mine = spans.filter { $0.step == step }
+        guard !mine.isEmpty else { return nil }
+        return mine.reduce(0) { $0 + ($1.end ?? Date()).timeIntervalSince($1.start) }
+    }
+    var expectsSky: Bool { lastRun?.options.masking.sky ?? false }
+    /// The device processing this run (nil: this Mac).
+    var workerName: String? {
+        guard let o = lastRun?.options, o.compute != .thisMac else { return nil }
+        if let id = o.remoteWorkerId, let w = WorkerBrowser.shared.workers.first(where: { $0.id == id }) { return w.name }
+        return host ?? "a worker"
+    }
+    /// "1,227 photos · processed on BensPC · then trained"
+    var summary: String {
+        guard let r = lastRun else { return "" }
+        var parts = [r.source.displayName]
+        parts.append(workerName.map { "processed on \($0)" } ?? "processed on this Mac")
+        if r.thenTrain { parts.append("then trained") }
+        return parts.joined(separator: " · ")
+    }
+    /// Snapshots (SPLAT_UI_PREP): previews may show files older than the run.
+    private(set) var previewAnyAge = false
+
+    /// Developer aid for UI snapshots: shows a run as if these progress lines had arrived, `dt` seconds apart.
+    func simulateForSnapshot(project dir: URL, source: SourceDescription, options: PrepOptions, lines: [(PipelineProgress, Double)]) {
+        reset()
+        running = true; projectDir = dir; lastRun = (source, options, true); thenTrain = true; previewAnyAge = true
+        var t = Date().addingTimeInterval(-lines.reduce(0) { $0 + $1.1 })
+        startedAt = t
+        for (p, dt) in lines { ingest(p, now: t); t = t.addingTimeInterval(dt) }
+        lastUpdate = Date().addingTimeInterval(-2)
+    }
+    func endSimulation() { running = false; previewAnyAge = false; projectDir = nil; reset() }
+
+    private func trackStep(_ p: PipelineProgress, now: Date) {
+        let st = p.stage
+        if st.hasPrefix("On "), let c = st.firstIndex(of: ":") { host = String(st.dropFirst(3)[..<c]) }
+        else if st.hasPrefix("Uploading to ") { host = String(st.dropFirst("Uploading to ".count)) }
+        else if st.hasPrefix("Downloading from ") { host = String(st.dropFirst("Downloading from ".count)) }
+        guard let s = Step.of(stage: st) else { return }
+        if s != spans.last?.step {
+            if !spans.isEmpty { spans[spans.count - 1].end = now }
+            spans.append(StepSpan(step: s, start: now))
+            if s == .cameras { solveSubstep = -1 }
+        }
+        if let c = PrepProgressView.counter(in: p.message) {
+            counterSamples.append((now, c.done, s)); counterSamples.removeAll { now.timeIntervalSince($0.0) > 60 || $0.2 != s }
+        }
+        if s == .cameras {
+            let m = (p.stage + " " + p.message).lowercased()
+            if let i = Self.solveSubsteps.lastIndex(where: { $0.keys.contains { m.contains($0) } }), i > solveSubstep { solveSubstep = i }
+        }
+    }
+
     var elapsed: Double { startedAt.map { Date().timeIntervalSince($0) } ?? 0 }
     var sinceLastUpdate: Double { lastUpdate.map { Date().timeIntervalSince($0) } ?? 0 }
 
@@ -802,8 +923,7 @@ final class PrepSession {
         return (stageEnds[p] ?? Date()).timeIntervalSince(s)
     }
 
-    private func ingest(_ p: PipelineProgress) {
-        let now = Date()
+    private func ingest(_ p: PipelineProgress, now: Date = Date()) {
         lastUpdate = now
         if p.fraction >= 0 { overall = max(overall, p.fraction) }
         let ph = phase
@@ -812,6 +932,7 @@ final class PrepSession {
             stageStarts[ph] = now
         }
         if let e = p.stageETA { stageETA = (e, now) }
+        trackStep(p, now: now)
         samples.append((now, overall))
         if samples.count > 400 { samples.removeFirst(samples.count - 400) }
         let stamp = Self.clock.string(from: now)
@@ -923,6 +1044,7 @@ final class PrepSession {
         logFile = projectDir.appendingPathComponent("prep.log")
         self.thenTrain = thenTrain
         startedAt = Date(); lastUpdate = startedAt; overall = 0; samples.removeAll(); stageStarts.removeAll(); stageEnds.removeAll(); stageETA = nil
+        spans.removeAll(); host = nil; solveSubstep = -1
         progress = PipelineProgress(stage: "Starting", fraction: 0, message: "")
         let dsDir = projectDir.appendingPathComponent("dataset", isDirectory: true)
         let workerId = options.remoteWorkerId
@@ -1045,5 +1167,6 @@ final class PrepSession {
         error = nil; log.removeAll(); cancelRequested = false; overall = 0
         progress = PipelineProgress(stage: "", fraction: 0, message: "")
         startedAt = nil; lastUpdate = nil; stageStarts.removeAll(); stageEnds.removeAll(); samples.removeAll(); stageETA = nil
+        spans.removeAll(); host = nil; solveSubstep = -1
     }
 }

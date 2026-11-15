@@ -50,6 +50,24 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var video: String? = nil
     var videoOptions: VideoExtractionOptions? = nil
     var equirect: Equirect360Options? = nil
+    /// task = frames: old home video restoration and clips instead of plain extraction (splatprep `vhs.py`).
+    var vhs: VHS? = nil
+    /// task = sfm: {image basename: group}; the images of a group share one camera (home-video clips / zoom settings).
+    var cameraGroups: [String: Int]? = nil
+    /// task = sfm with cameraGroups: {clip id: camera travel} from vhs.json — lets splatprep leave out wrongly joined clips.
+    var clipTravel: [String: Double]? = nil
+    /// task = sfm: leave out a drone flight's take-off / landing shots before solving (splatprep default: on).
+    var skipTakeoff: Bool? = nil
+
+    struct VHS: Codable, Hashable, Sendable {
+        var analyseOnly: Bool? = nil
+        var clips: [Int]? = nil
+        var maxHeight: Int? = nil
+        var denoise: Bool? = nil
+        var colour: Bool? = nil
+        var repairDropouts: Bool? = nil
+        var totalFrames: Int? = nil
+    }
 
     struct MaskPrompt: Codable, Hashable, Sendable {
         var points: [[Float]]? = nil   // [x, y, label]
@@ -226,6 +244,8 @@ struct SplatPrepPoseSolver: PoseSolver {
     var priorPoses: String? = nil
     /// Use masks of the frames to drop keypoints on masked pixels.
     var useMasks: Bool = true
+    /// Leave out a drone flight's take-off / landing shots (nil: splatprep's default, on).
+    var skipTakeoff: Bool? = nil
 
     /// Builds the request for a frame set (also used for remote `/v1/process`).
     func request(for frames: FrameSet) -> ProcessingRequest {
@@ -233,8 +253,18 @@ struct SplatPrepPoseSolver: PoseSolver {
         r.imagesDir = "images"; r.outputDir = "sfm"
         r.features = features; r.matching = matching; r.mapper = mapper; r.cameraModel = cameraModel
         r.maxKeypoints = maxKeypoints; r.resizeMax = resizeMax; r.priorPoses = priorPoses
+        r.skipTakeoff = skipTakeoff
         let sizes = Set(frames.frames.map { "\($0.width)x\($0.height)" })
         r.singleCamera = sizes.count == 1 && frames.rig == nil
+        if frames.rig == nil, !frames.isMultiViewRig, frames.frames.contains(where: { $0.cameraGroup != nil }) {
+            // home video: a camera per clip (or per zoom setting within one)
+            r.singleCamera = false
+            r.cameraGroups = Dictionary(frames.frames.compactMap { f in f.cameraGroup.map { ((f.image as NSString).lastPathComponent, $0) } },
+                                        uniquingKeysWith: { a, _ in a })
+            if let a = HomeVideoAnalysis.load(frames.root) {
+                r.clipTravel = Dictionary(a.clips.compactMap { c in c.cameraTravel.map { (String(c.id), $0) } }, uniquingKeysWith: { a, _ in a })
+            }
+        }
         if useMasks, frames.frames.contains(where: { $0.mask != nil }) { r.masksDir = "masks" }
         if frames.frames.contains(where: { $0.sky != nil }) { r.skyMasksDir = "splatprep-sky/masks" }
         if let rig = frames.rig {

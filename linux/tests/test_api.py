@@ -560,6 +560,14 @@ def test_dataset_json_layer_without_images(client, dataset_dir, tmp_path):
     assert c.get("hasDatasetJson") is True, c
     r = client.post("/v1/jobs", headers=AUTH, json={"datasetId": c["datasetId"], "config": {"iterations": 5}})
     assert r.status_code == 200, r.text
+    # an intermediate compose step that holds dataset.json but not the images (a big batched upload combined in
+    # several calls): kept as a partial layer, not refused, and trainable once the images are composed in
+    r = client.post("/v1/datasets/compose", headers=AUTH, json={"layers": [{"datasetId": b}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["hasDatasetJson"] is False
+    mid = r.json()["datasetId"]
+    c2 = client.post("/v1/datasets/compose", headers=AUTH, json={"layers": [{"datasetId": a}, {"datasetId": mid}]}).json()
+    assert c2.get("hasDatasetJson") is True, c2
 
 
 def test_info_reports_memory_and_streaming(client):

@@ -17,7 +17,7 @@ from .common import action_row, alert, append_text, esc, label, scrolled_page, t
 
 PROFILE_CHOICES = [(None, "Automatic (recommended)")] + [(p.id, p.label) for p in GPU_PROFILES] + \
     [(p.id, p.label) for p in PROCESSING_GPU_PROFILES] + \
-    [(CPU_PROFILE_ID, "Processing only (no training)")]
+    [(CPU_PROFILE_ID, "Processing only, on the CPU (no gsplat)")]
 
 
 class SetupAssistant(Adw.Window):
@@ -98,12 +98,20 @@ class SetupAssistant(Adw.Window):
                      (f"supports CUDA {driver.cuda_version[0]}.{driver.cuda_version[1]}"
                       if driver.cuda_version else None)]
             subtitle = " · ".join(f for f in facts if f)
+        elif driver.vulkan_trains:
+            other = driver.other_gpu
+            vk = driver.vulkan or {}
+            icon, title = "emblem-ok-symbolic", other.name
+            mem = other.memory_mb or vk.get("memoryMB")
+            facts = [f"{mem / 1024:.0f} GB video memory" if mem else None,
+                     "Vulkan trainer (experimental)", vk.get("driver", "").split(" ")[0] or None]
+            subtitle = " · ".join(f for f in facts if f)
         else:
             problem = driver.problem()
             icon, title = "dialog-warning-symbolic", problem[0] if problem else "No NVIDIA GPU found"
             subtitle = ""
         img = Gtk.Image(icon_name=icon, pixel_size=64)
-        img.add_css_class("success" if driver.has_gpu and choice.can_train else "warning")
+        img.add_css_class("success" if (driver.has_gpu or driver.vulkan_trains) and choice.can_train else "warning")
         head.append(img)
         head.append(label(title, ("title-1",), xalign=0.5))
         if subtitle:
@@ -171,7 +179,8 @@ class SetupAssistant(Adw.Window):
         later = Gtk.Button(label="Not Now")
         later.add_css_class("pill")
         later.connect("clicked", lambda *_: self.close())
-        install = Gtk.Button(label="Install" if self.plan.can_train else "Install Processing Runtime")
+        install = Gtk.Button(label="Install" if self.plan.can_train or self.choice.can_train
+                             else "Install Processing Runtime")
         install.add_css_class("pill")
         install.add_css_class("suggested-action")
         install.connect("clicked", lambda *_: self.start_install())
@@ -301,6 +310,9 @@ class SetupAssistant(Adw.Window):
             devices = ", ".join(verify.get("devices") or []) or "your GPU"
             desc = (f"PyTorch {verify.get('torch')} and gsplat {verify.get('gsplat')} are installed and can use "
                     f"{devices}. Start the server, then open SplatWork on your Mac.")
+        elif self.driver is not None and self.driver.vulkan_trains:
+            desc = ("The processing runtime is installed. This computer prepares datasets, and trains with "
+                    "SplatWork's Vulkan trainer (experimental). Start the server, then open SplatWork on your Mac.")
         else:
             desc = ("The processing runtime is installed. This computer can run dataset processing jobs from "
                     "the Mac, but not training.")

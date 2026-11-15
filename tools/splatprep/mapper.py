@@ -10,6 +10,8 @@ import sys
 import functools
 import os
 import re
+
+import numpy as np
 import shutil
 import subprocess
 from pathlib import Path
@@ -317,6 +319,142 @@ def _run_single(
                 fh.write(note + "\n")
     progress(1.0, f"registered {len(rec.images)} images" + (f"; {note}" if note else ""))
     return rec, chosen
+
+
+#: A GPS-held model must spread at least this far (RMS, metres) across its second axis to be kept.
+MIN_SPREAD_M = 2.0
+
+
+def _cli_pose_prior_mapper() -> Optional[str]:
+    colmap = find_executable("colmap")
+    return colmap if colmap and "pose_prior_mapper" in colmap_commands(colmap) else None
+
+
+@functools.lru_cache(maxsize=1)
+def _pycolmap_prior_mapping() -> bool:
+    """pycolmap whose incremental mapper can hold cameras to prior positions (COLMAP 3.10+ / 4)."""
+    import subprocess
+
+    try:
+        r = subprocess.run([sys.executable, "-c", "import pycolmap; o = pycolmap.IncrementalPipelineOptions(); "
+                            "o.use_prior_position = True; print('ok')"], capture_output=True, text=True, timeout=60)
+        return r.returncode == 0 and "ok" in r.stdout
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def gps_prior_mapper_available() -> bool:
+    """Incremental mapping held to prior camera positions: COLMAP's ``pose_prior_mapper`` or pycolmap's mapper
+    with ``use_prior_position`` (SplatWork for Linux / Windows workers have pycolmap but no COLMAP CLI)."""
+    return bool(_cli_pose_prior_mapper()) or _pycolmap_prior_mapping()
+
+
+def write_position_priors(database: Path, positions: Dict[str, Sequence[float]], std_h: float = 3.0,
+                          std_v: float = 5.0) -> int:
+    """Store camera-centre priors (local east/north/up metres, COLMAP's CARTESIAN system) for images by name.
+    Handles the legacy table (COLMAP < 4) and the rig-era one (a COLMAP 4 tool has already opened the database)."""
+    import sqlite3
+
+    import numpy as np
+
+    con = sqlite3.connect(str(database))
+    try:
+        cols = [r[1] for r in con.execute("PRAGMA table_info(pose_priors)")]
+        if not cols:
+            con.execute("CREATE TABLE pose_priors (image_id INTEGER PRIMARY KEY NOT NULL, position BLOB, "
+                        "coordinate_system INTEGER NOT NULL, position_covariance BLOB)")
+            cols = ["image_id", "position", "coordinate_system", "position_covariance"]
+        rows = {name: (iid, cam) for iid, name, cam in con.execute("SELECT image_id, name, camera_id FROM images")}
+        cov = np.diag([std_h ** 2, std_h ** 2, std_v ** 2]).astype(np.float64).tobytes()
+        n = 0
+        for name, p in positions.items():
+            if name not in rows:
+                continue
+            iid, cam = rows[name]
+            pos = np.asarray(p, np.float64).reshape(3).tobytes()
+            if "corr_data_id" in cols:   # sensor type 0 = camera, coordinate system 1 = cartesian
+                con.execute("DELETE FROM pose_priors WHERE corr_data_id=? AND corr_sensor_type=0", (iid,))
+                con.execute("INSERT INTO pose_priors (corr_data_id, corr_sensor_id, corr_sensor_type, position, "
+                            "position_covariance, coordinate_system) VALUES (?, ?, 0, ?, ?, 1)", (iid, cam, pos, cov))
+            else:
+                con.execute("INSERT OR REPLACE INTO pose_priors (image_id, position, coordinate_system, "
+                            "position_covariance) VALUES (?, ?, 1, ?)", (iid, pos, cov))
+            n += 1
+        con.commit()
+        return n
+    finally:
+        con.close()
+
+
+def run_gps_prior_mapper(database: Path, image_dir: Path, out_dir: Path, log_path: Optional[Path] = None,
+                         progress: Optional[Callable[[float, str], None]] = None, num_images: int = 0,
+                         positions: Optional[Dict[str, Sequence[float]]] = None) -> Reconstruction:
+    """Incremental mapping held to the priors written by :func:`write_position_priors` (robust loss, so a few
+    bad GPS fixes don't pull the solve). Slower than the global mapper, but it can't fold or double a survey.
+    Uses COLMAP's ``pose_prior_mapper`` when the CLI has it, else pycolmap with ``use_prior_position``."""
+    progress = progress or (lambda f, m="": None)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    registered = [0]
+
+    def on_line(line: str):
+        if re.search(r"Registering image #(\d+)", line):
+            registered[0] += 1
+            if num_images:
+                progress(min(0.95, registered[0] / num_images), f"registered {registered[0]}/{num_images} (held to GPS)")
+
+    colmap = _cli_pose_prior_mapper()
+    if colmap:
+        progress(0.02, "incremental mapping held to GPS positions (COLMAP)")
+        run_logged([colmap, "pose_prior_mapper", "--database_path", database, "--image_path", image_dir,
+                    "--output_path", out_dir, "--use_robust_loss_on_prior_position", "1"], log_path, on_line)
+    else:
+        progress(0.02, "incremental mapping held to GPS positions (pycolmap)")
+        run_logged([sys.executable, "-c", _PYCOLMAP_PRIOR_SCRIPT, str(database), str(image_dir), str(out_dir)],
+                   log_path, on_line)
+    # Incremental mapping often ends in several models (e.g. two flights at different heights that share few
+    # matches). Each is held to the same GPS positions; to be sure they share one frame whichever engine ran,
+    # each is aligned to the GPS positions (robust Sim3) before they are combined. A model whose cameras lie
+    # along one line (a single flight line) is left out — positions alone can't fix its roll about that line.
+    from .colmap_model import merge_reconstructions
+    from .geometry import robust_umeyama
+
+    keep, dropped = [], 0
+    for p in find_models(out_dir):
+        r = read_model(p)
+        C = np.array([im.center() for im in r.images.values()])
+        sv = np.linalg.svd(C - C.mean(0), compute_uv=False) / np.sqrt(max(len(C), 1)) if len(C) >= 3 else np.zeros(3)
+        if not (len(C) >= 3 and sv[1] >= max(MIN_SPREAD_M, 0.05 * sv[0])):
+            dropped += len(r.images)
+            continue
+        if positions:
+            names = [im.name for im in r.images.values() if im.name in positions]
+            if len(names) >= 3:
+                by = r.image_by_name()
+                T, _ = robust_umeyama(np.array([by[n].center() for n in names]), np.array([positions[n] for n in names]))
+                r.transform(T)
+        keep.append(r)
+    if not keep:
+        raise SplatPrepError("GPS-held mapping produced no reconstruction")
+    rec = merge_reconstructions(keep)
+    progress(1.0, f"registered {len(rec.images)} images (held to GPS; {len(keep)} part(s)"
+                  + (f", {dropped} image(s) along single flight lines left out)" if dropped else ")"))
+    return rec
+
+
+_PYCOLMAP_PRIOR_SCRIPT = r"""
+import sys, pathlib, pycolmap
+db, img, out = sys.argv[1:4]
+opts = pycolmap.IncrementalPipelineOptions()
+opts.use_prior_position = True
+opts.use_robust_loss_on_prior_position = True
+maps = pycolmap.incremental_mapping(database_path=db, image_path=img, output_path=out, options=opts)
+for idx, rec in maps.items():
+    d = pathlib.Path(out) / str(idx)
+    d.mkdir(parents=True, exist_ok=True)
+    rec.write(str(d))
+print(f"Registered {max((len(r.images) for r in maps.values()), default=0)} images")
+"""
 
 
 _PYCOLMAP_SCRIPT = r"""

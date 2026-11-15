@@ -479,6 +479,22 @@ def sfm_request(base: Dict[str, Any], fs: Dict[str, Any], fisheye: bool) -> Tupl
     return r, r.get("cameraModel") != "pinhole"
 
 
+def gps_gate(sfm_dir: Path) -> None:
+    """splatprep compared the solved cameras with the photos' GPS (gps_check.json). When many are far off, the
+    solve has folded or doubled the scene: stop before training on it, as the Mac does (DatasetBuilder)."""
+    try:
+        chk = json.loads((Path(sfm_dir) / "gps_check.json").read_text())
+    except (OSError, ValueError):
+        return
+    if chk.get("ok") is False:
+        bad = round(float(chk.get("badFraction") or 0) * 100)
+        raise PipelineError(
+            f"The solved cameras don't match the photos' GPS: {bad} % of them are far from their GPS position "
+            f"(typically {round(float(chk.get('medianM') or 0))} m off, over a {round(float(chk.get('extentM') or 0))} m "
+            "flight), so the scene would come out folded or doubled. Redo from Cameras to solve again, or turn off "
+            "Use photo locations to keep this solve anyway.")
+
+
 def read_solution(work: Path, fs: Dict[str, Any], prefix: str = "sfm",
                   prefer_output: bool = False) -> Tuple[Dict[str, Dict[str, Any]], Optional[Path]]:
     """SplatPrepPoseSolver.readSolution: {frame image: pose} and the solve's point cloud."""
@@ -975,6 +991,7 @@ class PipelineRunner:
         s = self._child(st, "process", self._work_id(), "request", req, PROGRESS_SCALE)
         shutil.rmtree(work / "sfm", ignore_errors=True)
         self._take_output(s, work / "sfm")
+        gps_gate(work / "sfm")
         poses, points = read_solution(work, fs, "sfm", prefer)
         multiview = bool(fs.get("isMultiViewRig"))
         dropped = pose_sanity(poses, fs, ordered=conf.get("sequential", False) and not multiview)

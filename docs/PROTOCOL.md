@@ -161,7 +161,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `monoDepthWeight` | float | 0 | depth-loss weight for those predicted maps (0 = normals only) |
 | `anisotropyMaxRatio` | float | 10 | axis ratio above which the needle penalty applies |
 | `appearanceCorrection` | bool | true | per-photo colour correction: rendered RGB → M·rgb + b (3×3 + 3 per training image), seeded from camera `exposure`, used only in the loss |
-| `bilateralGrid` | bool | false | per-photo *local* colour correction (16×16 image cells × 8 brightness levels of 3×4 colour transforms per training image), used only in the loss; mean over photos pinned to identity; replaces `appearanceCorrection` when on. `bilateralGridLR` (2e-3), `bilateralGridTV` (10) |
+| `bilateralGrid` | bool | false | per-photo *local* colour correction (16×16 image cells × 8 brightness levels of 3×4 colour transforms per training image), used only in the loss; mean over photos pinned to identity; replaces `appearanceCorrection` when on. `bilateralGridLR` (2e-3), `bilateralGridTV` (10). From `colourGuardStart` (4000) on, each eval scores 8 training photos rendered without it: 2 evals in a row more than 3 dB below their best PSNR, or under 0.6× the photos' brightness, reset the grids; the second time the grid is turned off for the run (worker ≥ 1.7.1, Mac) |
 | `progressiveResolution` | bool | false | coarse-to-fine: ¼ → ½ → ¾ → full image resolution over the first half of the densification window (worker ≥ 1.3.9) |
 | `decoupledSSIM` | bool | false | with per-photo colour correction, SSIM contrast/structure use the uncorrected render (luminance the corrected one) (worker ≥ 1.3.9) |
 | `backgroundShell` | int | 0 | splats on a far-field sphere (3× scene size) for distant land/sky beyond the capture (worker ≥ 1.3.9, Mac) |
@@ -181,9 +181,9 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 
 | Method & path | Body | Response |
 |---|---|---|
-| `GET /v1/info` | – | `{"name","version":1,"gpus":[{"name","memoryMB","freeMemoryMB"}],"backend":"gsplat 1.x","busy":bool,"queueLength":int}` |
+| `GET /v1/info` | – | `{"name","version":1,"gpus":[{"name","memoryMB","freeMemoryMB"}],"backend":"gsplat 1.x","busy":bool,"queueLength":int}`; worker ≥ 1.7.3 adds `"slots":[{"id","name","kinds","cuda","vulkan","integrated","slow","memoryMB","busy","stepsPerSecond","relativeSpeed"}]` — one job per slot at a time; speeds are measured Vulkan training steps/s (null until measured, `splatworker measure-gpus`). `"gpus"` lists the fast slots only: a `slow` slot (measured under 25 % of the fastest; unmeasured, an integrated GPU beside another) takes a train job that names it, or a standalone one (no `region` / `cameraIds`, not a pipeline step) while every fast slot is busy |
 | `POST /v1/datasets` | raw zip of the `dataset/` directory (`Content-Type: application/zip`) | `{"datasetId": "abc"}` |
-| `POST /v1/jobs` | `{"datasetId":"abc","name":"Kitchen","config":{TrainingConfig}}` | `{"jobId":"j1"}` |
+| `POST /v1/jobs` | `{"datasetId":"abc","name":"Kitchen","config":{TrainingConfig}}` (+ optional `"slot"`: an id from `/v1/info` `"slots"` — the job runs on that GPU only; worker ≥ 1.7.3) | `{"jobId":"j1"}` |
 | `GET /v1/jobs` | – | `[JobStatus]` |
 | `GET /v1/jobs/{id}` | – | `JobStatus` |
 | `POST /v1/jobs/{id}/cancel` | – | `JobStatus` |
@@ -288,6 +288,29 @@ side-by-side (anamorphic when the frame is narrower than 2.6:1) or top-bottom. O
 calibration (`offlineCal` container tag): the baseline, per-eye intrinsics, which stream is the left eye, and the
 fisheye image circle (written as `masks/<frame>_L.png` keep masks). Only the chosen frames' other eye is decoded on
 demand (two decoded frames held). Apple MV-HEVC spatial video needs VideoToolbox and stays Mac-only.
+
+**Old home video (worker ≥ 1.6.0, capability `homevideo`).** A `task: frames` request may carry `"vhs"` instead of
+plain extraction (`tools/splatprep/vhs.py`, `docs/dev/VHS.md`):
+
+```jsonc
+"vhs": {"analyseOnly": false,          // true: only find the clips (vhs.json + vhs-thumbs/), no frames
+        "clips": [1, 4],               // clip ids from vhs.json; null = every clip judged "good"
+        "totalFrames": 400,            // frames over all chosen clips (shared by camera travel, ≤ framesPerClip each)
+        "maxHeight": 576,              // output height in square pixels; tape holds no more
+        "denoise": true, "colour": true, "deinterlace": true, "repairDropouts": true, "maskOverlays": true,
+        "minClipSeconds": 4.0, "framesPerClip": 150}
+```
+
+Output in `outputDir`: `images/` (cropped, square pixels), `masks/` (only for clips with a burnt-in date stamp;
+255 = keep), `frames.json` whose frames carry `clip` and `cameraGroup`, `vhs.json` (file properties and clips:
+`id`, `start`, `end`, `verdict` = `good` | `rotationOnly` | `static` | `blurry` | `short` | `noSignal`, `reason`,
+`parallax`, `cameraTravel`, `zooms`, `overlay`, `thumbnail`, `selected`, `cameras`, `colour`; plus `used`),
+`vhs-thumbs/` and `vhs-analysis.npz` (per-frame measurements; a later request in the same folder reuses it instead
+of decoding the video again).
+
+An `sfm` request may carry `"cameraGroups": {"000012.jpg": 2000, …}` (image basename → group): the images of a group
+share one camera, every other image gets its own. Home video sends one group per clip, and a new group within a clip
+each time the lens has zoomed by more than ~8 %.
 
 **Rigs with a baseline (worker ≥ 1.4.0).** In an `sfm` request's `rig.groups`, a value may be
 `{"R": R, "t": [x, y, z]}` instead of `R` (`t` = camera centre in the rig frame, metres). Sensors are told apart by

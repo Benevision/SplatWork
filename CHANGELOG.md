@@ -6,6 +6,89 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.3 — every GPU trains with the Vulkan trainer:** with the Vulkan trainer chosen, each
+  Vulkan GPU is its own job slot, so a PC with two cards trains two jobs at once. *Settings → GPUs* now lists GPUs
+  only the Vulkan trainer can use (AMD, Intel, integrated). An integrated GPU next to a faster card starts unticked
+  and, when ticked, only takes a training job of its own while the faster GPUs are busy, never a block of a block
+  run, so existing runs are as fast as before. Speeds are measured rather than guessed: *Settings → GPUs → Measure
+  GPU speed* (or `splatworker measure-gpus`) trains a small scene on each GPU, and a GPU under a quarter of the
+  fastest counts as slow; an unmeasured integrated GPU counts as slow. `/v1/info` lists the slots with their
+  measured speeds (`"slots"`); `splatworker benchmark --slot` tests one GPU. Processing and Auto clean stay on CUDA
+  GPUs.
+- **Smaller, resumable uploads to workers.** Photos sent to a Linux worker are re-saved for the upload only; the
+  project keeps the originals. *Settings → Uploads to workers → Upload size* offers three options:
+  - **Standard** (default): about ¾ the bytes, 38 dB from the original;
+  - **Compact:** about half, 36 dB;
+  - **Original.**
+
+  Both re-saved sizes differ from the originals far less than a splat can show. Location and a drone's height
+  above take-off are kept. Uploads go in batches of about 200 MB that the worker combines (every worker since
+  1.3.8), and the Mac remembers which batches arrived. A retry after an interruption sends only the missing ones,
+  where before it started again from zero. Videos are sent as they are. On 300 drone photos (1.3 GB): Standard
+  sent 1.0 GB, Compact 740 MB, and a stopped upload resumed from its last finished batch.
+  Uploads of more than 16 batches (about 3 GB) failed with "Worker error 400: invalid dataset … image(s)
+  missing". When the batches were combined in groups, the group holding dataset.json didn't have all its photos.
+  Fixed on both sides: the Mac now adds dataset.json only in the final combine, and the worker (SplatWork for
+  Linux 1.7.2) keeps such a group as a partial layer instead of refusing it.
+- **Drone surveys: take-off shots left out, and a few stray cameras no longer fail the run.** Photos taken near
+  the ground while the rest of the flight is well above (DJI's height above take-off: under 5 m, or under 30 % of the
+  flight's usual height) are left out before the camera solve. The new switch *Leave out take-off and landing shots*
+  is on by default. After the solve, when the cameras as a whole match GPS (median error under a quarter of the
+  limit), up to 15 % that are far from their GPS position are left out instead of stopping the run. On the
+  1,227-photo survey a good solve, typically 1 m from GPS with 4 % far off, used to stop. A folded solve still stops.
+- **A new preparation screen on the Mac:** a progress ring with elapsed time and time left. A timeline shows every
+  step with its time: photos, upload, masks, sky, camera solve, finalise, download. A card for the current step
+  says where it runs (this Mac or a Linux worker) and gives live counters with a rate ("9,866 of 14,128 pairs"),
+  the camera-solve sub-steps and the recent activity. Live previews show the latest photos, the masks and the sky
+  tinted onto the photos, and a top-down map of the solved cameras over the sparse points. Uploads to a worker
+  show size, speed and time left. The full log is one click away.
+- **The same colour-correction safeguard on the Mac's trainer.** On healthy runs it stays quiet (checked on an
+  iPhone capture and a drone survey).
+- **SplatWork for Linux 1.7.1 — colour-correction safeguard:** per-photo local colour correction (bilateral grid)
+  can no longer take over a scene's colour, as it did on a drone survey trained on a wrong camera solve (the result
+  came out nearly black, its colours held by the correction, while held-out PSNR fell from 14.9 to 9.3 dB). From
+  step 4000, at each eval, both Linux trainers (gsplat and Vulkan) score 8 training photos rendered without the
+  correction. Two evals in a row more than 3 dB below their best, or renders under 0.6 of the photos' brightness,
+  reset every grid; the second time, the correction is turned off for the rest of the run, which a resumed job
+  remembers. The job log and status say so and point at the camera solve. Same check as the Mac trainer's.
+- **SplatWork for Linux 1.7.0 — training on AMD and Intel graphics cards (experimental):** a new Vulkan trainer is
+  built into the app. It needs no PyTorch or CUDA download and runs on any GPU with a Vulkan driver.
+  - On AMD and Intel cards it trains by default; NVIDIA cards keep the gsplat (CUDA) trainer, and the Vulkan one can
+    be chosen in *Settings → Training → Trainer*.
+  - It reads the same training settings as the CUDA trainer: both densification strategies, skybox, appearance
+    correction and bilateral grid, depth and normal losses, moving-object masking, pose refinement, the compact
+    optimizer, previews, checkpoints and pause / resume. Depth priors are predicted with PyTorch when the processing
+    runtime is installed.
+  - The setup assistant says the card trains with the Vulkan trainer, and the Mac sees the card and the trainer
+    (`/v1/info` "trainer").
+  - Not yet run on a real GPU: it has only been checked against gsplat on Mesa's software Vulkan driver. Quality and
+    speed on real cards are still to be measured (`linux/vktrain/compare_training.sh`). Densification still copies
+    the splats to the CPU and back, and Auto clean still needs gsplat.
+
+- **Drone surveys no longer fold or double the scene:** photos with GPS are now matched with their GPS
+  neighbours (DJI's numbered file names made them look like video, so neighbouring flight lines were only linked
+  by look-alike guesses — identical sheds matched to each other). If the solve still disagrees with GPS, it is
+  solved again held to the GPS positions, and the parts of that solve (e.g. two flights at different heights)
+  are combined. On a 1,227-photo property survey the cameras went from a median 48 m off GPS (scene doubled) to
+  0.96 m. If a solve still doesn't match GPS, preparation stops with a clear message instead of training on it
+  (turn off *Use photo locations* to keep it anyway).
+- **Home video (VHS, camcorder tapes), new:** a *Home video* tile on the Mac and in SplatWork for Linux turns
+  digitised old tapes into splats.
+  - The video is read once and split into clips at scene cuts. Each clip gets a verdict: the camera moves; it only
+    turns; it hardly moves; it's blurred; it's mostly moving people, water or a car; it's too short; or the picture
+    is blank. The clip with the most depth is ticked; tick others of the same place to join them.
+  - Frames are picked where the camera has moved on and the picture is sharpest. Repeated frames from tape transfers
+    are skipped.
+  - Each frame is cleaned: black borders and the head-switching band are cropped, pixels are made square, interlaced
+    frames are rebuilt, tracking lines are repaired, the frame is denoised with its neighbours, and each clip's colour
+    cast is taken out. Burnt-in date stamps are masked.
+  - Each clip, and each zoom setting within a clip, gets its own camera. A ticked clip that the solve can't place
+    with the others (its cameras land on one spot, or it gets an impossible zoom) is left out, with the reason.
+  - Training uses SH degree 1 and ignores moving people.
+  - It runs on the Mac or on a Linux worker. Results and limits are in `docs/dev/VHS.md`.
+- **Video with non-square pixels is no longer stretched:** PAL / NTSC captures and re-encoded tape transfers store
+  pixels that aren't square. Their frames are now resampled to square pixels on the Mac and on Linux workers, so the
+  camera solve isn't given a squashed picture.
 - **SplatWork for Windows (new, untested on real hardware):** the Linux worker and studio, with the same GTK 4
   interface, packaged for Windows 10 / 11 as an `.msi` installer and a portable `.zip`.
   - It includes the Projects list, the new project flow, the viewer and editor, Compute devices and the setup

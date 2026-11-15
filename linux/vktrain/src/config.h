@@ -79,6 +79,7 @@ struct TrainConfig {
     bool bilateralGrid = false;
     double bilateralGridLR = 2e-3;
     double bilateralGridTV = 10.0;
+    int64_t colourGuardStart = 4000;   // trainer.py ColourGuard
     bool progressiveResolution = false;
     bool decoupledSSIM = false;
     int64_t backgroundShell = 0;
@@ -111,7 +112,8 @@ struct FeatureContext {
     bool hasSky = false;            // any training photo has a sky mask
     bool exposureLocked = false;    // all photos within 10 % exposure (appearance correction off in trainer.py)
 };
-// One line per enabled feature the Vulkan trainer does not implement yet (empty when everything is supported).
+// One line per enabled feature the Vulkan trainer does not implement yet (empty since stage 2b implemented them all;
+// kept for features added to the protocol later).
 std::vector<std::string> unsupportedNotes(const TrainConfig& c, const FeatureContext& f);
 
 }  // namespace vkt

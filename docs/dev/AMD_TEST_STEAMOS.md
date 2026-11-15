@@ -15,7 +15,7 @@ the important lines start with `SPLATWORK-`. The app sets `HSA_OVERRIDE_GFX_VERS
 flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
 ```
 
-Already installed? Update instead: `flatpak update --user com.example.SplatWorker`. Check the version (1.6.0 or
+Already installed? Update instead: `flatpak update --user com.example.SplatWorker`. Check the version (1.7.0 or
 newer):
 
 ```bash
@@ -61,35 +61,46 @@ If PyTorch can't see the card, also paste:
 flatpak run --command=sh com.example.SplatWorker -c 'env | grep -E "HSA|HIP|ROC"; ls /sys/class/kfd/kfd/topology/nodes/*/'
 ```
 
-## 4. Training spike (experimental)
+## 4. Training with the Vulkan trainer (experimental)
 
-Needs the gsplat-for-ROCm wheel the project builds on GitHub (prerelease `gsplat-1.5.3-rocm6.4`). If setup says it
-isn't published yet, stop here and report that. This replaces the runtime from step 3 (the old one is kept until
-the new one checks out):
-
-```bash
-flatpak run com.example.SplatWorker --install-runtime --profile rocm6.4-train --lightglue --yes 2>&1 | tee ~/splatwork-install-train.log | tail -40
-```
+SplatWork 1.7.0 and newer have a built-in Vulkan trainer: it is part of the app (nothing to download) and
+trains on this card by default. It uses SteamOS's own AMD Vulkan driver (RADV, from the Flatpak runtime). This is
+its first run on a real GPU.
 
 ```bash
-flatpak run com.example.SplatWorker --cli gpu-check 2>&1 | tee ~/splatwork-gpucheck-train.txt
+flatpak run com.example.SplatWorker --cli info 2>&1 | tee ~/splatwork-info.txt | grep -A9 -E '"trainer"|"vulkanTrainer"'
 ```
 
-Look for `gsplat` ✓ with `msPerStep` and `gradFinite: true`.
+Expected: `"trainer"` → `"kind": "vulkan"`, and `"vulkanTrainer"` → `"ok": true`, a device like
+`AMD Radeon RX 6700 XT (RADV NAVI22)`, `"deviceType": "discrete"`, about 12 GB. If `"ok"` is false, paste the
+whole `~/splatwork-info.txt` and also:
 
-Then the standard benchmark (the same one the Mac runs; about 10–20 minutes). Open SplatWork, make sure the
-server is **on** (Queue & Worker page), then:
+```bash
+flatpak run --command=splatwork-vk-train com.example.SplatWorker --info; flatpak run --command=sh com.example.SplatWorker -c 'ls /usr/share/vulkan/icd.d/ /usr/lib/x86_64-linux-gnu/GL/*/vulkan/icd.d/ 2>&1'
+```
+
+Then the standard benchmark (the same one the Mac runs; about 10–30 minutes). Open SplatWork, make sure the server
+is **on** (Queue & Worker page), then:
+
+```bash
+flatpak run com.example.SplatWorker --cli benchmark --quick 2>&1 | tail -15
+```
 
 ```bash
 flatpak run com.example.SplatWorker --cli benchmark 2>&1 | tee ~/splatwork-benchmark.txt | tail -30
 ```
 
-Paste the JSON at the end: `trainStepsPerSecond`, `psnr` and `evalPsnr` are what count (for comparison, the RTX 4080
-PC's numbers are in its Models & Benchmarks page). A quick smoke test first, if the full run looks slow:
-`flatpak run com.example.SplatWorker --cli benchmark --quick`.
+The quick one (a tiny scene, 200 steps) only checks that training works. Paste the JSON at the end of the full one:
+`trainStepsPerSecond`, `psnr` and `evalPsnr` are what count (the RTX 4080 PC's numbers are in its Models &
+Benchmarks page). Also paste the job's log (Queue & Worker page, or the newest
+`~/.var/app/com.example.SplatWorker/data/splatworker/data/jobs/*/train.log`): its first lines say which device and
+which atomics path the trainer used, and its last ones give the time per step.
 
-If training fails, paste the job log from the Queue & Worker page (or the newest
-`~/.var/app/com.example.SplatWorker/data/splatworker/data/jobs/*/train.log`).
+If training fails or the card hangs (a GPU reset shows as the screen flickering or `amdgpu: GPU reset` in
+`journalctl -k`), paste the job log and `journalctl -k -b | grep -i amdgpu | tail -30`.
+
+The experimental ROCm build of gsplat (runtime profile `rocm6.4-train`) is no longer needed: its build doesn't work
+on Radeon cards (docs/dev/GPU_SUPPORT.md).
 
 ## 5. Optional: a real scene
 
@@ -103,5 +114,5 @@ com.example.SplatWorker`.
 
 ## What to send back
 
-`~/splatwork-gpucheck.txt`, `~/splatwork-gpucheck-train.txt`, `~/splatwork-benchmark.txt`, the outputs of step 2,
-and the install logs if a step failed.
+`~/splatwork-gpucheck.txt`, `~/splatwork-info.txt`, `~/splatwork-benchmark.txt` with the job log, the outputs of
+step 2, and the install logs if a step failed.

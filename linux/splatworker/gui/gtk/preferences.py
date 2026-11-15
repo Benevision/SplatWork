@@ -8,11 +8,13 @@ from typing import Callable, List, Optional
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from ..installer import remove_runtime
-from ..nvidia import GpuInfo, detect
+from ..nvidia import detect
 from ..paths import in_flatpak
 from .common import action_row, alert, run_in_thread
 
 LOG_LEVELS = ["critical", "error", "warning", "info", "debug"]
+TRAINERS = [("auto", "Automatic"), ("gsplat", "gsplat (NVIDIA)"),
+            ("vulkan", "Vulkan (experimental)")]
 
 
 class Preferences:
@@ -27,14 +29,15 @@ class Preferences:
         self.on_autostart = on_autostart
         self.on_setup = on_setup
         self._gpu_checks: List[Gtk.CheckButton] = []
-        self._gpus: List[GpuInfo] = []
+        self._gpu_keys: List[object] = []    # CUDA index or "vk:<pci>" per row (slots.py)
+        self._gpu_probe: tuple = ([], [])    # (CUDA GPUs, Vulkan devices) the rows were built from
 
         if hasattr(Adw, "PreferencesDialog"):
             self.dialog = Adw.PreferencesDialog(title="Settings")
         else:  # pragma: no cover - libadwaita 1.4
             self.dialog = Adw.PreferencesWindow(title="Settings", transient_for=window, modal=True)
         page = Adw.PreferencesPage(title="Settings", icon_name="emblem-system-symbolic")
-        for grp in (self._network(), self._storage(), self._gpus_group(), self._startup(),
+        for grp in (self._network(), self._storage(), self._gpus_group(), self._trainer(), self._startup(),
                     self._runtime(), self._advanced()):
             page.add(grp)
         self.dialog.add(page)
@@ -157,33 +160,89 @@ class Preferences:
         g = Adw.PreferencesGroup(title="GPUs",
                                  description="Each selected GPU trains one job at a time; more GPUs = more jobs "
                                              "in parallel.")
-        self.all_gpus = Adw.SwitchRow(title="Use all GPUs", subtitle="Recommended. Turn off to choose GPUs, "
-                                      "e.g. to keep one free for gaming or display.",
+        self.all_gpus = Adw.SwitchRow(title="Use all GPUs", subtitle="Recommended: every GPU except an integrated one next to "
+                                      "a faster card. Turn off to choose GPUs, e.g. to keep one free for gaming.",
                                       active=self.s.gpus is None)
         self.all_gpus.connect("notify::active", lambda *_: self._gpus_changed())
         g.add(self.all_gpus)
         self.gpu_group = g
         self._gpu_rows: List[Adw.ActionRow] = []
 
-        def done(info, error):
-            if error is None and info is not None:
-                self._gpus = info.gpus
-                for gpu in info.gpus:
-                    row = action_row(f"GPU {gpu.index}: {gpu.name}",
-                                     f"{gpu.memory_total_mb / 1024:.0f} GB" if gpu.memory_total_mb else "")
-                    check = Gtk.CheckButton(active=self.s.gpus is None or gpu.index in (self.s.gpus or []),
-                                            valign=Gtk.Align.CENTER)
-                    check.connect("toggled", lambda *_: self._gpus_changed())
-                    row.add_prefix(check)
-                    row.set_activatable_widget(check)
-                    row.set_sensitive(self.s.gpus is not None)
-                    self._gpu_checks.append(check)
-                    self._gpu_rows.append(row)
-                    g.add(row)
-                if not info.gpus:
-                    g.add(action_row("No NVIDIA GPU detected.", icon="dialog-warning-symbolic"))
-        run_in_thread(detect, done)
+        def probe():
+            from ... import gpuspeed
+            from ...slots import gpu_choices
+            from ...vktrain import list_devices
+
+            info = detect()
+            cuda = [{"index": gpu.index, "name": gpu.name, "memoryMB": gpu.memory_total_mb} for gpu in info.gpus]
+            vk = list_devices()["devices"]
+            self._gpu_probe = (cuda, vk)
+            return info, gpu_choices(cuda, vk, self.s.gpus, gpuspeed.load())
+
+        def done(result, error):
+            if error is not None or result is None:
+                return
+            info, rows = result
+            for r in rows:
+                row = action_row(r["title"], r["subtitle"])
+                check = Gtk.CheckButton(active=r["active"], valign=Gtk.Align.CENTER)
+                check.connect("toggled", lambda *_: self._gpus_changed())
+                row.add_prefix(check)
+                row.set_activatable_widget(check)
+                row.set_sensitive(self.s.gpus is not None)
+                self._gpu_keys.append(r["key"])
+                self._gpu_checks.append(check)
+                self._gpu_rows.append(row)
+                g.add(row)
+            from ...slots import _vulkan_usable
+
+            if any(_vulkan_usable(d) for d in self._gpu_probe[1]):
+                self._measure_row = action_row("Measure GPU speed",
+                                               "Trains a small test scene for a minute or two on each GPU with the "
+                                               "Vulkan trainer, so slow GPUs are kept out of the way. Run it while "
+                                               "no job is running.")
+                btn = Gtk.Button(label="Measure", valign=Gtk.Align.CENTER)
+                btn.connect("clicked", lambda b: self._measure_gpus(b))
+                self._measure_row.add_suffix(btn)
+                g.add(self._measure_row)
+            if not rows:
+                other = info.other_gpu
+                g.add(action_row(f"{other.name}: trains with the Vulkan trainer" if other is not None
+                                 else "No NVIDIA GPU detected.",
+                                 "One job at a time on this card." if other is not None else "",
+                                 icon="dialog-information-symbolic" if other is not None
+                                 else "dialog-warning-symbolic"))
+        run_in_thread(probe, done)
         return g
+
+    def _measure_gpus(self, btn: Gtk.Button) -> None:
+        from ... import gpuspeed
+        from ...slots import _vulkan_usable, gpu_choices
+
+        cuda, vk = self._gpu_probe
+        devs = [d for d in vk if _vulkan_usable(d)]
+        btn.set_sensitive(False)
+        btn.set_label("Measuring…")
+
+        def work():
+            from ..paths import AppPaths
+
+            return gpuspeed.measure_all(devs, AppPaths.from_env().cache_dir / gpuspeed.SCENE_DIR)
+
+        def done(result, error):
+            btn.set_sensitive(True)
+            btn.set_label("Measure again")
+            if error is not None:
+                self._toast(f"Measuring failed: {error}")
+                return
+            failed = [r["name"] for r in result.values() if r.get("error")]
+            rows = gpu_choices(cuda, vk, self.s.gpus, gpuspeed.load())
+            subs = {r["key"]: r["subtitle"] for r in rows}
+            for key, row in zip(self._gpu_keys, self._gpu_rows):
+                if key in subs:
+                    row.set_subtitle(subs[key])
+            self._toast("Couldn't measure " + ", ".join(failed) if failed else "GPU speeds measured")
+        run_in_thread(work, done)
 
     def _gpus_changed(self) -> None:
         use_all = self.all_gpus.get_active()
@@ -192,11 +251,25 @@ class Preferences:
         if use_all:
             self._set("gpus", None)
             return
-        chosen = [gpu.index for gpu, c in zip(self._gpus, self._gpu_checks) if c.get_active()]
-        if not chosen and self._gpus:
+        chosen = [key for key, c in zip(self._gpu_keys, self._gpu_checks) if c.get_active()]
+        if not chosen and self._gpu_keys:
             self._toast("Select at least one GPU.")
             return
         self._set("gpus", chosen or None)
+
+    def _trainer(self) -> Adw.PreferencesGroup:
+        g = Adw.PreferencesGroup(title="Training")
+        keys = [k for k, _ in TRAINERS]
+        combo = Adw.ComboRow(title="Trainer",
+                             subtitle="Automatic uses gsplat on NVIDIA cards and the built-in Vulkan trainer on AMD "
+                                      "and Intel cards. The Vulkan trainer needs no GPU runtime download, but it is "
+                                      "new: it hasn't been checked against gsplat on real GPUs yet. The server "
+                                      "restarts when you change this.",
+                             model=Gtk.StringList.new([label for _, label in TRAINERS]))
+        combo.set_selected(keys.index(self.s.trainer) if self.s.trainer in keys else 0)
+        combo.connect("notify::selected", lambda r, _p: self._set("trainer", keys[r.get_selected()]))
+        g.add(combo)
+        return g
 
     def _startup(self) -> Adw.PreferencesGroup:
         g = Adw.PreferencesGroup(title="Startup and background")

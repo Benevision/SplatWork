@@ -59,7 +59,11 @@ def test_misplaced_layer_is_caught(monkeypatch):
     wrong = enu.copy()
     wrong[enu[:, 2] == 68, 2] = 10.0  # the high layer solved below the others
     r = _check(monkeypatch, wrong, geo)
-    assert not r["ok"] and r["badFraction"] > 0.05
+    # The rest of the solve matches GPS, so the misplaced layer's cameras are left out instead of failing the run
+    # (a solve that is wrong as a whole — large median error — still fails: test_spatial_pairs).
+    layer = {f"{i:04d}.jpg" for i in range(len(enu)) if enu[i, 2] == 68}
+    assert r["badFraction"] > 0.05 and set(r["outliers"]) == layer
+    assert r["ok"] == (r["badFraction"] <= 0.15)
 
 
 def test_single_stray_camera_is_an_outlier(monkeypatch):

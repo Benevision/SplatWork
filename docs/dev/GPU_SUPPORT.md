@@ -234,9 +234,9 @@ carries on as the experimental `rocm6.4-train` runtime. The Mac trainer is not c
   after the first reset interval, gradients scaled by W/2, H/2, `absGrad` with the ×4 threshold, the growth stop
   at `maxGaussians`); holdout PSNR (clamped render, masks scored against the render, mean over photos);
   `cameraIds` and the region camera test; the PLY layout with the `splatstudio_up` comment (gravityUp first).
-- **Logged as not supported yet** (one line each when enabled; 2b): appearance correction, bilateral grid,
+- **Logged as not supported yet in 2a** (implemented in 2b, see below): appearance correction, bilateral grid,
   decoupled SSIM, depth supervision, depth-normal loss and depth priors (incl. `priorInitPoints`,
-  `monoDepthWeight`), transient masking, skybox, pose refinement, `optimizerPrecision: compact` (fp32 is used).
+  `monoDepthWeight`), transient masking, skybox, pose refinement, `optimizerPrecision: compact`.
 - **Deliberate differences:** the result is trimmed to the region's expanded box (trainer.py writes everything and
   leaves the cropping to the Mac's merger; neither prunes during training). gsplat 1.5's DefaultStrategy never
   resets opacities (`step % reset_every == 0 & step > 0` parses as a chained comparison that is always false):
@@ -254,8 +254,177 @@ carries on as the experimental `rocm6.4-train` runtime. The Mac trainer is not c
   ≤ 1.5e-4 over 70 steps). Real GPU numbers come from the PC (`compare_training.sh`).
 - **PC comparison:** `bash linux/vktrain/compare_training.sh DATASET [--iterations N] [--strategy both]` trains
   with the CUDA trainer (`flatpak run com.example.SplatWorker --cli train`) and with splatwork-vk-train on the same
-  config (unsupported features off for both) and prints eval PSNR, splats, wall time and steps / s. `--no-cuda`
-  for AMD / Intel.
+  config (since 2b with every feature on as configured; `--core-only` switches the 2b features off for both) and
+  prints eval PSNR, splats, wall time and steps / s. `--no-cuda` for AMD / Intel.
+
+### Stage 2b status (every TrainingConfig feature)
+
+The Vulkan trainer now implements everything 2a logged as unsupported; `unsupportedNotes()` is empty. Per-pixel work
+runs on the GPU (`shaders/sky_*`, `corr_*`, `transient_*`, `depth_normal` / `depth_gather`, the pose terms in
+`preprocess_bwd`, `adam_bf16` / `adam_sh8`); the small per-photo models step on the host (`src/models.*`,
+`src/compact.*`). One gradient-image change carries most of it: gradImg has a fifth plane, an extra dL/dT_final per
+pixel that raster_bwd adds to the background term (sky colour, sky penalty, the normalised-depth terms).
+
+- **Skybox** (skybox.py): logits [H][2H][rgb] starting at (0.6, 0.65, 0.7), sampled like `grid_sample` (bilinear,
+  border, `align_corners=False`) at (longitude/π, −latitude/(π/2)) of the pixel's direction in skybox.py's basis of
+  `upVector`; splats rasterised over black, then `+ T · sky` (`sky_composite`); gradients to T and to the texels
+  (`sky_backward`: one subgroup reduction per distinct texel footprint, then float atomics); Adam (lr 0.01, eps 1e-15)
+  on the GPU; the sky-mask coverage penalty `skyAlphaWeight · Σ alpha·m / max(Σ m, 1)` (masks resized bilinearly at
+  load, area-averaged at progressive scales); no random background is drawn while the sky is on; holdouts are scored
+  over the sky; `<out>.sky.png` (8-bit sigmoid, 2:1) and `<out>.sky.json` exactly as `Skybox.save` writes them.
+- **Colour correction**: `AppearanceCorrection` (12 numbers per photo, exposure-seeded gain, L2 pull to the seed,
+  Adam eps 1e-8 per photo stepped only when drawn; off when the exposure is locked; holdouts keep their seed) and
+  `BilateralGrid` (12 × 8 × 16 × 16 per training photo, trilinear in (x, y, luminance of the detached render), exact
+  gradient over every pixel — the Mac samples every 4th — TV loss, Adam eps 1e-15, mean pinned to identity every 50
+  steps; replaces the 3×3 model). Both only in the loss. `decoupledSSIM` = `ssim_split` (luminance of the corrected
+  render, contrast-structure of the raw one; 6 blurred planes and 4 derivative maps per channel).
+- **Depth** on gsplat's expected depth ED = D / max(alpha, 1e-10) (gradients to the depth plane and T): the depth
+  loss `Σ ew·|ED − d| / #valid` (edge-aware weight from the photo's luminance gradient), and `normal_consistency_loss`
+  (central-difference normals: 1 px and 10 % on the render, k = round(W / map width) px and 5 % on the map, alpha >
+  0.9; `(1−c)/2 + sqrt((1−c)/2 + 1e-4)`; per-neighbour gradient slots gathered without atomics). Maps are sampled as
+  `resize_nearest` + `F.interpolate(nearest)` compose (progressive scales too). `depth/*.bin` float16 with
+  `depthWidth` / `depthHeight` (now parsed and checked like dataset.py).
+- **Depth priors**: the depth model (Depth Anything V2, PyTorch) can't run in this program. When the CUDA worker has
+  cached its predictions for the dataset (`depth-prior/meta.json` + `<id>-<sha1[:12]>.npy`, the same `cache_key`
+  reproduced bit for bit), they are used like trainer.py does (normal loss, `monoDepthWeight`, `priorInitPoints`);
+  otherwise one log line says so. Stage 3 can run the predictor as a processing job that fills that cache.
+- **Transient masking**: residual (corrected render vs photo), the image's median error, `max(median · sensitivity,
+  0.10)` as a 0.95 EMA over steps (state on the GPU), the solid-3×3 rule and the 16×16 patch vote (padded with
+  inliers past the image edge), active from `max(transientStart, 30 % of training)`, off for sparse captures
+  (`median_nearest_view_gap > transientMaxViewGap`).
+- **Pose refinement**: `preprocess_bwd` also sums dL/dW, dL/dt and dL/dcampos of the (corrected) camera over the
+  splats; the host chains them to the 9 numbers (translation, 6D rotation residual) by central differences of the
+  parametrisation in double, with `SparseAdam` semantics (one step count, only the drawn row's moments) and the L2
+  pull. Holdouts keep their poses.
+- **`optimizerPrecision: compact`**: compact_adam.py's formats on the GPU — bf16 moments with stochastic rounding for
+  positions, scales, rotations, opacities and the SH DC term; 8-bit codes (log-grid v, square-law m relative to
+  sqrt(v)) with one fp32 scale per splat for the 45 higher SH coefficients: 152 B of optimiser state per splat
+  instead of 472 B (≈ 620 instead of 940 B with params and grads). Host densification and the resume file carry the
+  GPU words losslessly ("carriers", `compact.h`).
+- **Resume file version 2** adds the models, their optimiser states, the sky and the transient threshold; a state
+  saved with other features or another `optimizerPrecision` is refused.
+- **Gradient checks** (`vktrain-selftest`, lavapipe): the whole image-space loss pipeline on three scenes (sky +
+  affine + decoupled SSIM + depth + normals + sky penalty; bilateral grid + depth at a progressive scale; sky + grid +
+  decoupled SSIM + normals) against finite differences of a double-precision reference written from trainer.py's
+  formulas: dL/drender 2–3e-5, dL/ddepth ≤ 3e-4, dL/dT ≤ 4.3e-4, dL/dsky ≤ 5.5e-4, dL/dcorrection ≤ 8e-5 (relative,
+  tolerance 2e-3); loss values ≤ 3.4e-7. Transient masks: 0 pixels differ from the CPU rule, threshold within 9e-6 of
+  the exact-median rule. Pose: 1.2e-4 (tolerance 2e-2, as the other end-to-end checks). The extra-T plane equals the
+  background term (5e-6). Compact Adam against a host reference with the same random numbers: median parameter
+  difference 0, 0.05 % of values > 1e-3 (a stochastic-rounding decision at its threshold flips when the GPU's
+  exp2 / log2 / FMA differ in the last bit), 0.08 % of code words differ; carrier round trip exact; rounding bias
+  < 1e-3 over 4000 seeds.
+- **End to end** (`tests/test_vktrain.py`, 600 steps on 128×96 synthetic scenes made by `make_synthetic.py` options):
+  sky (`--sky`): holdout 23.8 vs 21.6 dB without the skybox, the panorama blue just above the horizon and untouched
+  straight up; per-photo exposure / tint (`--color-shift`): 21.7 dB affine, 21.4 dB bilateral grid + decoupled SSIM
+  vs 20.1 dB without; depth maps (`--depth`): holdout depth error 0.11 vs 0.38 without (0.08 at depthWeight 1);
+  moving objects in 6 photos (`--transients 6`): 5.6 % of those photos' pixels dropped (the object covers 8.3 %),
+  0.4 % of the others'; poses perturbed by ~1 cm / 0.6° (`--pose-noise 0.01`): 21.6 vs 19.4 dB, mean correction
+  3 cm / 0.7°; compact Adam within 0.2 dB of fp32 (adaptive and MCMC); a resumed run with sky + appearance + transient
+  + pose + compact follows the uninterrupted one within 5e-5 (relative loss, 70 steps). The whole file takes ~11 min
+  on the aarch64 colima VM (16 tests; the 2b ones ~8 min). Lavapipe there advertises float atomic add but loses
+  updates; the start-up probe catches it almost always, but a run that slips through trains with wrong sums (seen
+  once in a resume comparison). Since then the probe runs six rounds and any wrong sum selects the CAS kernels.
+- **Deviations from trainer.py**: the median error comes from a 2048-bin histogram of every pixel (trainer.py:
+  the median of 65 536 random pixels); photos with an alpha channel are composited over black when the skybox is on
+  (trainer.py: over the sky, with a gradient through the target); the sky's viewing directions use the corrected
+  pose but give it no gradient; `priorInitPoints` colours come from the nearest pixel of the loaded photo and the
+  subsets from this program's generator; compact Adam's random numbers are a counter hash (statistically the same
+  rule, not bit-identical); the reported `loss` stays the photometric one. Extra log lines: holdout depth error when
+  holdout photos have depth maps, the transient fraction and the mean pose correction at the end (also in `done` as
+  `features`).
+- **Not done in 2b**: GPU densification (the host round trip of 2a remains; with compact Adam the carriers are as
+  large as fp32 moments on the host side, the GPU side is compact), the disk-streaming mode, real-GPU numbers.
+
+### Stage 3 status (1.7.0: the trainer in the app)
+
+- **Choice** (`splatworker/vktrain.py`): `serve --trainer auto|gsplat|vulkan` (env `SPLATWORKER_TRAINER`; the app's
+  *Settings → Training → Trainer*, `AppSettings.trainer`). `auto`: gsplat when an NVIDIA card is present (sysfs or
+  NVML / torch — unchanged for NVIDIA, with or without the CUDA runtime); otherwise the Vulkan trainer when
+  `splatwork-vk-train --info` finds a GPU (a CPU driver such as lavapipe doesn't count, except with
+  `SPLATWORK_VK_ALLOW_CPU=1` in tests); otherwise gsplat if installed (the old ROCm spike runtime). Chosen once per
+  server start; logged as `trainer: …`.
+- **Program interface**: `--info` is one JSON line with `deviceType`, `memoryMB` and `interface` (1;
+  `VKTRAIN_INTERFACE` in CMakeLists.txt — the worker refuses a different one). With no `--device` the program now
+  picks discrete > integrated > virtual > CPU (it used to fall back to device 0, which can be lavapipe).
+- **Jobs**: `vktrain.subprocess_entry` runs in the same spawned job process as the CUDA trainer, writes the config
+  to `vk-config.json`, starts the program with `--job-dir` (and `--resume resume.vkstate` when the job was paused)
+  and turns its JSON lines into the same queue messages; pause / checkpoint / cancel go to its stdin. The server
+  treats `resume.vkstate` like `resume.pt` (`RESUME_FILES`). `done` stats carry `"trainer": "vulkan"`.
+- **Depth priors**: when PyTorch + `transformers` are installed (the AMD / Intel processing runtime has them), the
+  job process fills `depth-prior/` with Depth Anything first (on ROCm / XPU / CPU), as trainer.py does; the program
+  reads that cache.
+- **`/v1/info`**: `"trainer": {kind, experimental, reason, device, driver, deviceType, memoryMB, …}`; `"backend"`
+  says "SplatWork Vulkan trainer (experimental) on <device>"; when PyTorch lists no GPU the Vulkan device is the
+  `"gpus"` entry (vendor from its PCI id, memory / free memory from sysfs), so the Mac sizes and schedules jobs.
+  `census` (Auto clean) is advertised only where gsplat is installed: it renders with gsplat.
+- **CLI**: `splatworker train --trainer vulkan …`; `info` adds `trainer` and `vulkanTrainer`; `gpu-check` adds a
+  `vulkan_trainer` step.
+- **Setup**: `DriverInfo.vulkan` (the probe, run by `detect()` when there is no usable NVIDIA GPU); on AMD / Intel
+  the assistant says the card trains with the Vulkan trainer (experimental) instead of "training needs NVIDIA", and
+  still installs the processing runtime (ROCm / XPU / CPU) for dataset preparation.
+- **Flatpak**: module `splatwork-vk-train` (cmake-ninja, `-DVKTRAIN_SELFTEST=OFF`) installs
+  `/app/bin/splatwork-vk-train`; glslang and the Vulkan headers from the GNOME SDK; drivers (RADV, ANV, NVIDIA) from
+  the runtime's GL extensions; `--device=all` already exposes `/dev/dri`.
+- **Tests**: `tests/test_vktrain_worker.py` (choice rules, the job runner against a fake program, backend,
+  `/v1/info`, settings, setup wording; no Vulkan needed) and `test_worker_job_pause_resume_and_info` in
+  `test_vktrain.py` (the real program through the worker on lavapipe: pause on request, resume, result).
+- **Still open**: real-GPU numbers (the 4080 comparison and the RX 6700 XT run, stage 4); GPU densification; the
+  disk-streaming mode (photos stay in RAM as 8-bit, like the CUDA trainer's in-memory mode); Auto clean without
+  gsplat; Windows (the program isn't built there yet).
+
+### Job slots per GPU (1.7.3)
+
+With the Vulkan trainer chosen, every Vulkan GPU can be its own job slot (BensPC: the RTX 4080 and its integrated
+Radeon 610M, gfx1036 / RDNA2 — spec sheets say ~0.6 against ~49 TFLOPS, but the slots go by measured speed).
+
+- **Program**: `splatwork-vk-train --list-devices` — one JSON line `{"devices": [{index, name, driver, deviceType,
+  vendorID, deviceID, memoryMB, pci}], "interface"}` (`pci` from `VK_EXT_pci_bus_info`, null when the driver can't
+  say; lavapipe can't). The worker caches it (`vktrain.list_devices`) and passes a job's slot device as `--device N`.
+- **Slots** (`splatworker/slots.py`): one per physical GPU. A CUDA GPU (key: its index) takes every kind of job and
+  trains on its matching Vulkan device (same PCI address, else the same name). A GPU only Vulkan can use (key
+  `vk:<pci>`) takes train jobs only, and exists only while the Vulkan trainer is the one training. CPU drivers aren't
+  slots (except with `SPLATWORK_VK_ALLOW_CPU=1`).
+- **Measured speed** (`splatworker/gpuspeed.py`): each Vulkan device trains the same small scene (the benchmark
+  scene at 800×600, 16 photos, 200 k splats held fixed, 300 steps) through `--device N`; the program's
+  `stepsPerSecond` is the speed. On demand only — *Settings → GPUs → Measure GPU speed* or
+  `splatworker measure-gpus [--device N]` — cached in `gpu-speeds.json` (app config dir) per PCI address and driver
+  (a driver update needs a new measurement). The server re-reads the file when it changes.
+- **Slow slots**: a slot that measured under 25 % of the fastest measured slot (`SLOW_RATIO`); until two slots are
+  measured, an integrated GPU beside another GPU counts as slow (conservative). Integrated GPUs are off by default ("Use all GPUs" means every GPU but those;
+  the user ticks it in *Settings → GPUs*, which now lists Vulkan-only GPUs). Even when ticked it is not in `/v1/info`
+  `"gpus"` (the devices the Mac counts) and takes a train job only when the job names it (`"slot"` in
+  `POST /v1/jobs`), or when every fast slot is busy and the job stands alone — not a block (`region` /
+  `cameraIds`) and not a step of a whole-pipeline job — so a block run never waits on it. An integrated GPU that is
+  the only GPU is an ordinary slot.
+- **`/v1/info` `"slots"`**: `[{id ("cuda:0", "vk:0000:c5:00.0", "default"), name, kinds, cuda, vulkan, integrated,
+  slow, memoryMB, busy, stepsPerSecond, relativeSpeed}]` (speeds null until measured). **Mac, later**: place jobs
+  per slot by measured speed (ComputeScheduler: send a small standalone job to a slow slot by name, size the ETA by
+  the slot), and show the slots on the Compute page; today the Mac ignores "slots" and sees
+  the same "gpus" as before, so existing runs schedule exactly as fast as in 1.7.2.
+- **Settings**: `settings.gpus` / `--gpus` / `SPLATWORKER_GPUS` take CUDA indices and `vk:<pci>` keys
+  (`0,vk:0000:c5:00.0`); configs with plain indices work as before.
+- **CLI**: `splatworker info` adds `vulkanDevices` and `gpuChoices` (the keys); `splatworker benchmark --slot ID`
+  runs the standard benchmark on one slot (not saved).
+- **Tests**: `tests/test_slots.py` (fake GPU lists: BensPC, AMD-only, integrated-only laptop; measured speeds;
+  scheduling; `/v1/info`; settings) and, on lavapipe in `test_vktrain.py`, `--list-devices` and a real measurement.
+
+**Test on BensPC (the first real RDNA2 run, same family as the RX 6700 XT).** In a terminal on BensPC, once the app
+shows SplatWork for Linux 1.7.3:
+
+1. `flatpak run --command=splatwork-vk-train com.example.SplatWorker --list-devices` — the 4080 and the 610M should
+   be listed (the 610M with `"deviceType":"integrated"` and a `pci` address; note it), plus the driver lines.
+2. **Speed first**, with no job running: `flatpak run --command=splatworker com.example.SplatWorker measure-gpus`
+   (or *Settings → GPUs → Measure GPU speed*). It trains the same small scene on each GPU and prints steps/s and
+   each GPU's share of the fastest. Send back that output. If the 610M fails or hangs here:
+   `journalctl -k -b | grep -i amdgpu | tail -40` (GPU resets).
+3. *Settings → Training → Trainer*: Vulkan. *Settings → GPUs*: turn off *Use all GPUs*, tick the RTX 4080 and the
+   Radeon 610M (the server restarts). The rows now show the measured speeds.
+4. Quality on the same set: `flatpak run --command=splatworker com.example.SplatWorker benchmark --quick --slot
+   vk:<pci>`, then `… --slot cuda:0`; if both finish, the full benchmark the same way (`… benchmark --slot …`,
+   long on the 610M). Send back steps/s and the final PSNR of each (job logs, *Jobs* page → log); the PSNRs
+   should be within ~0.5 dB. The 610M's job log says "starting on Vulkan device 1 (AMD Radeon 610M …)".
+5. Afterwards untick the 610M (or turn *Use all GPUs* back on) unless you want it to pick up standalone jobs while
+   the 4080 is busy (it does only if it measured under 25 % of the 4080).
 
 ### Stages (each checked in with the user)
 

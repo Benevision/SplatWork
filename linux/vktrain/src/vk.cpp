@@ -53,14 +53,48 @@ std::vector<VkPhysicalDevice> physicalDevices(VkInstance inst) {
 
 }  // namespace
 
-std::vector<std::string> Context::listDevices() {
+std::vector<DeviceSummary> Context::listDevices() {
     bool port = false;
     VkInstance inst = makeInstance(port);
-    std::vector<std::string> out;
-    for (auto d : physicalDevices(inst)) {
-        VkPhysicalDeviceProperties p;
-        vkGetPhysicalDeviceProperties(d, &p);
-        out.push_back(p.deviceName);
+    std::vector<DeviceSummary> out;
+    auto devs = physicalDevices(inst);
+    for (size_t i = 0; i < devs.size(); i++) {
+        VkPhysicalDevice d = devs[i];
+        uint32_t ne = 0;
+        vkEnumerateDeviceExtensionProperties(d, nullptr, &ne, nullptr);
+        std::vector<VkExtensionProperties> dexts(ne);
+        vkEnumerateDeviceExtensionProperties(d, nullptr, &ne, dexts.data());
+        const bool pciExt = hasExtension(dexts, VK_EXT_PCI_BUS_INFO_EXTENSION_NAME);
+        VkPhysicalDevicePCIBusInfoPropertiesEXT pci{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT};
+        VkPhysicalDeviceDriverProperties drv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        if (pciExt) drv.pNext = &pci;
+        VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        props.pNext = &drv;
+        vkGetPhysicalDeviceProperties2(d, &props);
+        DeviceSummary s;
+        s.index = int(i);
+        s.name = props.properties.deviceName;
+        s.driver = std::string(drv.driverName) + " " + drv.driverInfo;
+        s.vendorID = props.properties.vendorID;
+        s.deviceID = props.properties.deviceID;
+        switch (props.properties.deviceType) {
+            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: s.deviceType = "discrete"; break;
+            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: s.deviceType = "integrated"; break;
+            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: s.deviceType = "virtual"; break;
+            case VK_PHYSICAL_DEVICE_TYPE_CPU: s.deviceType = "cpu"; break;
+            default: s.deviceType = "other";
+        }
+        VkPhysicalDeviceMemoryProperties mp;
+        vkGetPhysicalDeviceMemoryProperties(d, &mp);
+        for (uint32_t h = 0; h < mp.memoryHeapCount; h++)
+            if (mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                s.deviceLocalBytes = std::max<uint64_t>(s.deviceLocalBytes, mp.memoryHeaps[h].size);
+        if (pciExt) {
+            char buf[32];
+            std::snprintf(buf, sizeof buf, "%04x:%02x:%02x.%x", pci.pciDomain, pci.pciBus, pci.pciDevice, pci.pciFunction);
+            s.pci = buf;
+        }
+        out.push_back(s);
     }
     vkDestroyInstance(inst, nullptr);
     return out;
@@ -73,11 +107,22 @@ Context::Context(const ContextOptions& opt) {
     if (devs.empty()) throw Error("no Vulkan device found");
     int pick = opt.deviceIndex;
     if (pick < 0) {
+        // discrete before integrated before virtual before CPU (lavapipe) — first of the best kind
+        auto rank = [](VkPhysicalDeviceType t) {
+            switch (t) {
+                case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return 0;
+                case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 1;
+                case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return 2;
+                case VK_PHYSICAL_DEVICE_TYPE_CPU: return 4;
+                default: return 3;
+            }
+        };
         pick = 0;
+        int best = 99;
         for (size_t i = 0; i < devs.size(); i++) {
             VkPhysicalDeviceProperties p;
             vkGetPhysicalDeviceProperties(devs[i], &p);
-            if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) { pick = int(i); break; }
+            if (rank(p.deviceType) < best) { best = rank(p.deviceType); pick = int(i); }
         }
     }
     if (pick >= int(devs.size())) throw Error("Vulkan device index out of range");
@@ -98,6 +143,20 @@ Context::Context(const ContextOptions& opt) {
     info.name = props.properties.deviceName;
     info.driver = std::string(drv.driverName) + " " + drv.driverInfo;
     info.vendorID = props.properties.vendorID;
+    switch (props.properties.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: info.deviceType = "discrete"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: info.deviceType = "integrated"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: info.deviceType = "virtual"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU: info.deviceType = "cpu"; break;
+        default: info.deviceType = "other";
+    }
+    {
+        VkPhysicalDeviceMemoryProperties mp;
+        vkGetPhysicalDeviceMemoryProperties(phys_, &mp);
+        for (uint32_t h = 0; h < mp.memoryHeapCount; h++)
+            if (mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                info.deviceLocalBytes = std::max<uint64_t>(info.deviceLocalBytes, mp.memoryHeaps[h].size);
+    }
     info.deviceID = props.properties.deviceID;
     info.apiVersion = props.properties.apiVersion;
     info.subgroupSize = sub.subgroupSize;
@@ -180,9 +239,16 @@ Context::Context(const ContextOptions& opt) {
 
     // Trust but verify: some drivers advertise float atomic add and lose updates under contention (seen on
     // Mesa lavapipe 25.0 / aarch64). In auto mode a failed probe falls back to the compare-and-swap kernels.
-    if (nativeAtomics && opt.atomics == ContextOptions::Atomics::Auto && probeFloatAtomics(100003) != 0) {
-        nativeAtomics = false;
-        info.nativeAtomicsBroken = true;
+    // The lost updates are intermittent (one probe passed in about 25 runs on lavapipe), so it runs several
+    // rounds and any wrong sum counts; each round is two small dispatches.
+    if (nativeAtomics && opt.atomics == ContextOptions::Atomics::Auto) {
+        for (int round = 0; round < 6; round++) {
+            if (probeFloatAtomics(round % 2 ? 4096 : 100003) != 0) {
+                nativeAtomics = false;
+                info.nativeAtomicsBroken = true;
+                break;
+            }
+        }
     }
 }
 

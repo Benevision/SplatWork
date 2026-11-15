@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "config.h"
 #include "nlohmann/json.hpp"
@@ -40,6 +41,8 @@ struct TrainOptions {
     ContextOptions ctx;
     bool opacityReset = false;    // adaptive strategy: textbook opacity reset (gsplat 1.5's never fires, see trainer.cpp)
     int64_t pauseAt = -1;         // tests: pause before this step, as if "pause" had arrived
+    std::vector<int64_t> darkenAt;  // tests: blacken every splat's colour at these eval steps (forces ColourGuard)
+    int64_t scrambleAt = -1;      // tests: from this step each training photo gets the next one's camera pose
     int64_t snapshotAt = -1;      // tests: save the resume state before this step to <job-dir>/snapshot.vkstate, go on
     std::string dumpEval;         // debugging: write the final holdout renders and targets as PPM files here
     int64_t traceEvery = 0;       // tests: {"type": "trace", step, loss, psnr, numGaussians} every N steps

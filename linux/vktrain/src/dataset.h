@@ -22,6 +22,7 @@ struct CameraInfo {
     double fx = 0, fy = 0, cx = 0, cy = 0;
     double c2w[4][4] = {};   // row-major, OpenCV convention
     std::string depth, mask, sky;
+    int depthWidth = 0, depthHeight = 0;   // the depth map's size (float16 values)
     bool holdout = false;
     double exposure = 0;     // 0 = not recorded
 };
@@ -53,6 +54,7 @@ struct View {
     std::vector<uint8_t> alpha;   // the image's own alpha (empty: opaque)
     std::vector<uint8_t> mask;    // 255 = train on the pixel (empty: no mask)
     std::vector<uint32_t> packed; // opaque photos after compact(): r | g<<8 | b<<16 | mask<<24 (rgb, mask freed)
+    std::vector<uint8_t> sky;     // sky mask, 255 = sky (empty: none), resized bilinearly like the loss mask
     Camera camera() const;
     void compact();               // opaque photos keep one packed copy (4 bytes / pixel) instead of rgb + mask
     // Pixel p: colour in 0..1, the photo's alpha and the loss mask (1 = train on it).
