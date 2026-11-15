@@ -499,7 +499,8 @@ def test_worker_job_pause_resume_and_info(build_dir, dataset, tmp_path, monkeypa
     assert listed["ok"] and listed["devices"], listed
     dev = listed["devices"][0]
     assert dev["index"] == 0 and dev["name"] == info["device"] and dev["deviceType"] == info["deviceType"]
-    assert set(dev) >= {"name", "driver", "deviceType", "vendorID", "deviceID", "memoryMB", "pci"}
+    assert set(dev) >= {"name", "driver", "deviceType", "vendorID", "deviceID", "memoryMB", "pci", "uuid",
+                        "apiVersion", "driverVersion", "integrated", "label"}
     plan = slots.plan(None, [], listed["devices"], "vulkan")
     assert plan[0].vulkan == 0 and not plan[0].slow
 

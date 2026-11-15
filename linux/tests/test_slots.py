@@ -261,3 +261,64 @@ def test_config_holds_the_splat_count():
 
     cfg = gpuspeed.config()
     assert cfg["iterations"] == 300 and cfg["densifyStart"] > 300 and cfg["maxGaussians"] == 200_000
+
+
+# ------------------------------------------- BensPC as 1.7.3 really saw it
+
+# NVML's PCI address has an 8-digit domain; the Flatpak's Vulkan loader lists every GPU twice (two driver copies);
+# RADV names the Ryzen's integrated Radeon 610M after the CPU.
+NVML_RTX = {"index": 0, "name": "NVIDIA GeForce RTX 4080", "vendor": "nvidia", "memoryMB": 16376,
+            "freeMemoryMB": 15000, "pci": "00000000:01:00.0"}
+RADV_NAME = "AMD Ryzen 9 9950X3D 16-Core Processor (RADV RAPHAEL_MENDOCINO)"
+REAL_VK = [
+    {"index": 0, "name": "NVIDIA GeForce RTX 4080", "deviceType": "discrete", "vendorID": 0x10DE, "memoryMB": 16376,
+     "pci": "0000:01:00.0", "driver": "NVIDIA 580.95.05", "apiVersion": 4210991, "driverVersion": 2436022336},
+    {"index": 1, "name": RADV_NAME, "deviceType": "integrated", "vendorID": 0x1002, "memoryMB": 2048,
+     "pci": "0000:11:00.0", "driver": "radv Mesa 25.1.3", "apiVersion": 4210991, "driverVersion": 104861699},
+    {"index": 2, "name": "NVIDIA GeForce RTX 4080", "deviceType": "discrete", "vendorID": 0x10DE, "memoryMB": 16376,
+     "pci": "0000:01:00.0", "driver": "NVIDIA 580.95.05", "apiVersion": 4210991, "driverVersion": 2436022336},
+    {"index": 3, "name": RADV_NAME, "deviceType": "integrated", "vendorID": 0x1002, "memoryMB": 2048,
+     "pci": "0000:11:00.0", "driver": "radv Mesa 25.1.3", "apiVersion": 4210991, "driverVersion": 104861699},
+    {"index": 4, "name": "llvmpipe (LLVM 19.1.7, 256 bits)", "deviceType": "cpu", "vendorID": 0x10005,
+     "memoryMB": 15701, "pci": None, "driver": "llvmpipe Mesa 25.1.3"},
+]
+REAL_ADAPTERS = [{"vendor": "nvidia", "name": "NVIDIA GeForce RTX 4080", "pci": "0000:01:00.0", "integrated": False},
+                 {"vendor": "amd", "name": "AMD Radeon 610M", "pci": "0000:11:00.0", "integrated": True}]
+
+
+def test_duplicate_vulkan_entries_are_one_gpu():
+    devs = vktrain.tidy_devices(REAL_VK, REAL_ADAPTERS)
+    assert [(d["index"], d.get("duplicates")) for d in devs] == [(0, [2]), (1, [3]), (4, None)]
+    assert devs[1]["integrated"] and devs[1]["label"] == "AMD Radeon 610M (integrated)"
+    assert devs[0]["label"] == "NVIDIA GeForce RTX 4080" and not devs[0]["integrated"]
+    newer = [dict(REAL_VK[1]), {**REAL_VK[3], "driver": "radv Mesa 25.2.0", "driverVersion": 104865792}]
+    assert [d["index"] for d in vktrain.tidy_devices(newer)] == [3]          # the newer driver copy is kept
+    assert vktrain.tidy_devices(vktrain.tidy_devices(REAL_VK, REAL_ADAPTERS)) == devs   # idempotent
+
+
+def test_benspc_settings_rows_as_reported():
+    devs = vktrain.tidy_devices(REAL_VK, REAL_ADAPTERS)
+    rows = S.gpu_choices([NVML_RTX], devs, None)                      # the server's NVML list (8-digit domain)
+    assert [(r["key"], r["title"], r["active"]) for r in rows] == [
+        (0, "GPU 0: NVIDIA GeForce RTX 4080", True), ("vk:0000:11:00.0", "AMD Radeon 610M (integrated)", False)]
+    gui_cuda = [{"index": 0, "name": "NVIDIA GeForce RTX 4080", "memoryMB": 16376}]   # the app's nvidia-smi list
+    assert [r["key"] for r in S.gpu_choices(gui_cuda, devs, None)] == [0, "vk:0000:11:00.0"]
+    assert [r["key"] for r in S.gpu_choices(gui_cuda, REAL_VK, None)] == [0, "vk:0000:11:00.0"]  # raw list too
+
+
+def test_benspc_slots_as_reported():
+    devs = vktrain.tidy_devices(REAL_VK, REAL_ADAPTERS)
+    slots = S.plan(None, [NVML_RTX], devs, "vulkan")
+    assert [(s.key, s.vulkan) for s in slots] == [(0, 0)]
+    slots = S.plan([0, "vk:0000:11:00.0"], [NVML_RTX], devs, "vulkan")
+    assert [(s.key, s.vulkan, s.slow, s.name) for s in slots] == [
+        (0, 0, False, "NVIDIA GeForce RTX 4080"), ("vk:0000:11:00.0", 1, True, "AMD Radeon 610M (integrated)")]
+
+
+def test_integrated_from_the_pci_scan_and_matching_by_memory():
+    odd = [{**REAL_VK[1], "deviceType": "other"}]                    # a driver that doesn't say "integrated"
+    devs = vktrain.tidy_devices(odd, REAL_ADAPTERS)
+    assert devs[0]["integrated"]
+    assert [r["active"] for r in S.gpu_choices([NVML_RTX], devs, None)] == [True, False]
+    renamed = [{**REAL_VK[0], "name": "NVIDIA GeForce RTX 4080 (driver name)", "pci": None, "uuid": "ab"}]
+    assert S.match_vulkan([{"index": 0, "name": "NVIDIA GeForce RTX 4080", "memoryMB": 16376}], renamed)[0]["index"] == 0

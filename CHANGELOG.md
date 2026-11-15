@@ -6,6 +6,12 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.4 — GPU list fixes:** *Settings → GPUs* listed the RTX 4080 twice and an integrated
+  Radeon twice (named after the CPU, ticked) on a PC where the Flatpak sees every GPU through two driver copies.
+  Each GPU is now listed once (same PCI address = one GPU, the newest driver copy kept), integrated GPUs are
+  recognised from the system's PCI scan and named as such ("AMD Radeon 610M (integrated)") and start unticked, and
+  a CUDA GPU is matched to its Vulkan device by PCI address, name, or vendor and memory size. *Measure GPU speed*
+  measures each GPU once.
 - **SplatWork for Linux 1.7.3 — every GPU trains with the Vulkan trainer:** with the Vulkan trainer chosen, each
   Vulkan GPU is its own job slot, so a PC with two cards trains two jobs at once. *Settings → GPUs* now lists GPUs
   only the Vulkan trainer can use (AMD, Intel, integrated). An integrated GPU next to a faster card starts unticked

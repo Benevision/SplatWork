@@ -378,8 +378,14 @@ With the Vulkan trainer chosen, every Vulkan GPU can be its own job slot (BensPC
 Radeon 610M, gfx1036 / RDNA2 — spec sheets say ~0.6 against ~49 TFLOPS, but the slots go by measured speed).
 
 - **Program**: `splatwork-vk-train --list-devices` — one JSON line `{"devices": [{index, name, driver, deviceType,
-  vendorID, deviceID, memoryMB, pci}], "interface"}` (`pci` from `VK_EXT_pci_bus_info`, null when the driver can't
-  say; lavapipe can't). The worker caches it (`vktrain.list_devices`) and passes a job's slot device as `--device N`.
+  vendorID, deviceID, memoryMB, pci, uuid, apiVersion, driverVersion}], "interface"}` (`pci` from
+  `VK_EXT_pci_bus_info`, null when the driver can't say; lavapipe can't). The worker caches it
+  (`vktrain.list_devices`) and passes a job's slot device as `--device N`.
+- **One entry per GPU** (1.7.4, `vktrain.tidy_devices`): BensPC's Flatpak listed every GPU twice (two driver copies).
+  Entries with the same PCI address (else device UUID) are one GPU; the newest Vulkan / driver version is kept
+  (ties: lower index; the rest in `duplicates`). The system's PCI scan (`gpu.adapters()`) sets `integrated` (also
+  when the driver doesn't say so) and a `label` ("AMD Radeon 610M (integrated)" instead of RADV's CPU name). CUDA ↔
+  Vulkan matching: normalised PCI address (NVML has an 8-digit domain), else name, else vendor + memory ±10 %.
 - **Slots** (`splatworker/slots.py`): one per physical GPU. A CUDA GPU (key: its index) takes every kind of job and
   trains on its matching Vulkan device (same PCI address, else the same name). A GPU only Vulkan can use (key
   `vk:<pci>`) takes train jobs only, and exists only while the Vulkan trainer is the one training. CPU drivers aren't

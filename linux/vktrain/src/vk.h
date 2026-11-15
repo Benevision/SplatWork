@@ -41,9 +41,10 @@ struct DeviceInfo {
 struct DeviceSummary {
     int index = 0;                    // --device N
     std::string name, driver, deviceType;
-    uint32_t vendorID = 0, deviceID = 0;
+    uint32_t vendorID = 0, deviceID = 0, apiVersion = 0, driverVersion = 0;
     uint64_t deviceLocalBytes = 0;
     std::string pci;                  // "0000:01:00.0" (VK_EXT_pci_bus_info), empty when the driver can't say
+    std::string uuid;                 // VkPhysicalDeviceIDProperties::deviceUUID, hex
 };
 
 struct ContextOptions {

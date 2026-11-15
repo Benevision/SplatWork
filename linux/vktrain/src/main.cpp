@@ -273,6 +273,7 @@ int main(int argc, char** argv) {
             for (const DeviceSummary& d : Context::listDevices())
                 arr.push_back({{"index", d.index}, {"name", d.name}, {"driver", d.driver}, {"deviceType", d.deviceType},
                                {"vendorID", d.vendorID}, {"deviceID", d.deviceID}, {"memoryMB", d.deviceLocalBytes >> 20},
+                               {"apiVersion", d.apiVersion}, {"driverVersion", d.driverVersion}, {"uuid", d.uuid},
                                {"pci", d.pci.empty() ? nlohmann::json(nullptr) : nlohmann::json(d.pci)}});
             nlohmann::json j = {{"devices", arr}, {"interface", VKTRAIN_INTERFACE}};
             std::printf("%s\n", j.dump().c_str());

@@ -86,18 +86,35 @@ def parse_key(text: str) -> SlotKey:
     raise ValueError(f"not a GPU: {text!r} (a CUDA index such as 0, or vk:<PCI address> for a Vulkan GPU)")
 
 
+def _integrated(dev: Dict[str, Any]) -> bool:
+    return bool(dev.get("integrated")) or dev.get("deviceType") == "integrated"
+
+
+def _label(dev: Dict[str, Any]) -> str:
+    return str(dev.get("label") or dev.get("name") or f"Vulkan device {dev.get('index')}")
+
+
+def _tidy(vk_devices: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    from .vktrain import tidy_devices
+
+    return tidy_devices(list(vk_devices or []))
+
+
 def _vulkan_usable(dev: Dict[str, Any]) -> bool:
     return dev.get("deviceType") != "cpu" or os.environ.get("SPLATWORK_VK_ALLOW_CPU") == "1"
 
 
 def match_vulkan(cuda_gpus: Sequence[Dict[str, Any]], vk_devices: Sequence[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
-    """CUDA index → its Vulkan device: same PCI address, else (no address on either side) the same name."""
+    """CUDA index → its Vulkan device: the same PCI address (NVML writes the domain with 8 digits, Vulkan with 4:
+    both normalised), else the same name, else the same vendor and memory size (±10 %)."""
+    from .gpu import normalize_pci
+
     out: Dict[int, Dict[str, Any]] = {}
     used = set()
     for g in cuda_gpus:
-        pci = g.get("pci")
+        pci = normalize_pci(str(g["pci"])) if g.get("pci") else None
         for d in vk_devices:
-            if d["index"] not in used and pci and d.get("pci") and d["pci"] == pci:
+            if d["index"] not in used and pci and d.get("pci") and normalize_pci(str(d["pci"])) == pci:
                 out[g["index"]] = d
                 used.add(d["index"])
                 break
@@ -109,18 +126,28 @@ def match_vulkan(cuda_gpus: Sequence[Dict[str, Any]], vk_devices: Sequence[Dict[
                 out[g["index"]] = d
                 used.add(d["index"])
                 break
+    for g in cuda_gpus:
+        if g["index"] in out or not g.get("memoryMB"):
+            continue
+        vendor = {"nvidia": 0x10DE, "amd": 0x1002, "intel": 0x8086}.get(g.get("vendor", "nvidia"))
+        same = [d for d in vk_devices if d["index"] not in used and int(d.get("vendorID") or 0) == vendor
+                and d.get("memoryMB") and abs(int(d["memoryMB"]) - int(g["memoryMB"])) <= 0.1 * int(g["memoryMB"])]
+        if len(same) == 1:
+            out[g["index"]] = same[0]
+            used.add(same[0]["index"])
     return out
 
 
 def vulkan_only_devices(cuda_gpus: Sequence[Dict[str, Any]], vk_devices: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The Vulkan devices no CUDA GPU matches (CPU drivers left out unless SPLATWORK_VK_ALLOW_CPU=1)."""
+    vk_devices = _tidy(vk_devices)
     matched = {d["index"] for d in match_vulkan(cuda_gpus, vk_devices).values()}
     return [d for d in vk_devices if d["index"] not in matched and _vulkan_usable(d)]
 
 
 def default_on(dev: Dict[str, Any], others: bool) -> bool:
     """Whether "Use all GPUs" includes this Vulkan-only device: not an integrated GPU, unless it is the only GPU."""
-    return dev.get("deviceType") != "integrated" or not others
+    return not _integrated(dev) or not others
 
 
 def plan(selected: Optional[Sequence[SlotKey]], cuda_gpus: Sequence[Dict[str, Any]],
@@ -128,7 +155,7 @@ def plan(selected: Optional[Sequence[SlotKey]], cuda_gpus: Sequence[Dict[str, An
          speeds: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Slot]:
     """The worker's slots. ``selected``: ``settings.gpus`` (None = every GPU but integrated ones beside others);
     ``speeds``: gpuspeed.load()."""
-    vk_devices = list(vk_devices or [])
+    vk_devices = _tidy(vk_devices)
     vulkan = trainer == "vulkan"
     match = match_vulkan(cuda_gpus, vk_devices) if vulkan else {}
     chosen = None if selected is None else list(selected)
@@ -143,17 +170,17 @@ def plan(selected: Optional[Sequence[SlotKey]], cuda_gpus: Sequence[Dict[str, An
         d = match.get(g["index"])
         slots.append(Slot(key=g["index"], name=g.get("name"), cuda=g["index"],
                           vulkan=d["index"] if d is not None else None,
-                          integrated=bool(d and d.get("deviceType") == "integrated"),
+                          integrated=bool(d and _integrated(d)),
                           memory_mb=g.get("memoryMB"), vendor=g.get("vendor", "nvidia"), device=d))
     if vulkan:
         extra = vulkan_only_devices(cuda_gpus, vk_devices)
-        others = bool(cuda_gpus) or any(d.get("deviceType") != "integrated" for d in extra)
+        others = bool(cuda_gpus) or any(not _integrated(d) for d in extra)
         for d in extra:
             key = vulkan_key(d)
             on = default_on(d, others) if chosen is None else key in chosen
             if on:
-                slots.append(Slot(key=key, name=d.get("name"), vulkan=d["index"],
-                                  integrated=d.get("deviceType") == "integrated", memory_mb=d.get("memoryMB"),
+                slots.append(Slot(key=key, name=_label(d), vulkan=d["index"],
+                                  integrated=_integrated(d), memory_mb=d.get("memoryMB"),
                                   vendor=_VENDORS.get(int(d.get("vendorID") or 0), "other"), device=d))
     if not slots:
         return [Slot(key=None)]
@@ -196,6 +223,7 @@ def gpu_choices(cuda_gpus: Sequence[Dict[str, Any]], vk_devices: Sequence[Dict[s
     from .gpuspeed import speed_of
 
     speeds = speeds or {}
+    vk_devices = _tidy(vk_devices)
     match = match_vulkan(cuda_gpus, vk_devices)
     rows: List[Dict[str, Any]] = []
     for g in cuda_gpus:
@@ -206,16 +234,16 @@ def gpu_choices(cuda_gpus: Sequence[Dict[str, Any]], vk_devices: Sequence[Dict[s
                      "active": selected is None or g["index"] in selected,
                      "speed": speed_of(d, speeds) if d else None})
     extra = vulkan_only_devices(cuda_gpus, vk_devices)
-    others = bool(cuda_gpus) or any(d.get("deviceType") != "integrated" for d in extra)
+    others = bool(cuda_gpus) or any(not _integrated(d) for d in extra)
     for d in extra:
         key = vulkan_key(d)
-        integrated = d.get("deviceType") == "integrated"
+        integrated = _integrated(d)
         if integrated and others:
             sub = ("Integrated GPU, speed not measured yet, so it counts as much slower than the others: it only "
                    "trains a job on its own while they are all busy, never part of a block run. Vulkan trainer only.")
         else:
             sub = "Trains with the Vulkan trainer (training jobs only)."
-        rows.append({"key": key, "title": str(d.get("name") or key), "subtitle": sub, "integrated": integrated,
+        rows.append({"key": key, "title": _label(d), "subtitle": sub, "integrated": integrated,
                      "active": default_on(d, others) if selected is None else key in selected,
                      "speed": speed_of(d, speeds)})
     best = max((r["speed"] for r in rows if r["speed"]), default=None)

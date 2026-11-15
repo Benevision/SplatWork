@@ -67,7 +67,9 @@ std::vector<DeviceSummary> Context::listDevices() {
         const bool pciExt = hasExtension(dexts, VK_EXT_PCI_BUS_INFO_EXTENSION_NAME);
         VkPhysicalDevicePCIBusInfoPropertiesEXT pci{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT};
         VkPhysicalDeviceDriverProperties drv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
-        if (pciExt) drv.pNext = &pci;
+        VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+        drv.pNext = &ids;
+        if (pciExt) ids.pNext = &pci;
         VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         props.pNext = &drv;
         vkGetPhysicalDeviceProperties2(d, &props);
@@ -77,6 +79,13 @@ std::vector<DeviceSummary> Context::listDevices() {
         s.driver = std::string(drv.driverName) + " " + drv.driverInfo;
         s.vendorID = props.properties.vendorID;
         s.deviceID = props.properties.deviceID;
+        s.apiVersion = props.properties.apiVersion;
+        s.driverVersion = props.properties.driverVersion;
+        {
+            char hex[2 * VK_UUID_SIZE + 1];
+            for (int k = 0; k < VK_UUID_SIZE; k++) std::snprintf(hex + 2 * k, 3, "%02x", ids.deviceUUID[k]);
+            s.uuid = hex;
+        }
         switch (props.properties.deviceType) {
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: s.deviceType = "discrete"; break;
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: s.deviceType = "integrated"; break;

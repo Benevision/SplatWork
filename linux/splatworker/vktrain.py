@@ -101,11 +101,59 @@ def list_devices(binary: Optional[str] = None, timeout: float = 60.0, refresh: b
             else:
                 data = json.loads(line)
                 devs = [d for d in data.get("devices") or [] if isinstance(d, dict) and isinstance(d.get("index"), int)]
-                out = {"ok": True, "devices": devs}
+                try:
+                    from .gpu import adapters
+
+                    found = adapters()
+                except Exception:  # noqa: BLE001
+                    found = []
+                out = {"ok": True, "devices": tidy_devices(devs, found)}
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             out = {"ok": False, "devices": [], "error": f"{type(e).__name__}: {e}"[:300]}
         _list_cache[binary] = out
         return out
+
+
+def tidy_devices(devs: List[Dict[str, Any]], adapters: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """``--list-devices`` entries, one per physical GPU, with ``integrated`` and a readable ``label``.
+
+    The Flatpak's Vulkan loader can see a GPU twice (two driver copies — BensPC listed the RTX 4080 and the Ryzen's
+    Radeon 610M twice each): entries with the same PCI address (else the same device UUID) are one GPU; the one
+    with the newest Vulkan / driver version is kept (ties: the lower index), the others' indices go in
+    ``duplicates``. The system's PCI scan (``gpu.adapters()``) marks integrated GPUs (RADV calls the 610M after the
+    CPU, "AMD Ryzen 9 9950X3D 16-Core Processor (RADV RAPHAEL_MENDOCINO)") and names them."""
+    from .gpu import normalize_pci
+
+    by_pci = {normalize_pci(a["pci"]): a for a in adapters or [] if a.get("pci")}
+    groups: Dict[Any, List[Dict[str, Any]]] = {}
+    order: List[Any] = []
+    for d in devs:
+        d = dict(d)
+        if d.get("pci"):
+            d["pci"] = normalize_pci(str(d["pci"]))
+        key = ("pci", d["pci"]) if d.get("pci") else ("uuid", d["uuid"]) if d.get("uuid") else ("index", d["index"])
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(d)
+    out = []
+    for key in order:
+        group = groups[key]
+        best = max(group, key=lambda e: (int(e.get("apiVersion") or 0), int(e.get("driverVersion") or 0),
+                                         -int(e["index"])))
+        best = dict(best)
+        others = sorted(e["index"] for e in group if e is not best and e["index"] != best["index"])
+        if others:
+            best["duplicates"] = others
+        a = by_pci.get(best.get("pci") or "")
+        best["integrated"] = (bool(best.get("integrated")) or best.get("deviceType") == "integrated"
+                              or bool(a and a.get("integrated")))
+        label = str(best.get("label") or best.get("name") or f"Vulkan device {best['index']}")
+        if best["integrated"] and a and a.get("name") and a["name"] not in label:
+            label = f"{a['name']} (integrated)"
+        best["label"] = label
+        out.append(best)
+    return out
 
 
 def usable(info: Dict[str, Any]) -> Optional[str]:
