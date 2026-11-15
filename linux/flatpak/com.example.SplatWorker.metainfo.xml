@@ -81,6 +81,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.2" date="2026-11-15">
+      <description>
+        <p>Large uploads from the Mac no longer fail when they are combined on this computer.</p>
+      </description>
+    </release>
     <release version="1.7.1" date="2026-11-15">
       <description>
         <p>Training no longer lets per-photo colour correction take over a scene's colour.</p>

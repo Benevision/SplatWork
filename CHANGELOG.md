@@ -17,6 +17,10 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
   1.3.8), and the Mac remembers which batches arrived. A retry after an interruption sends only the missing ones,
   where before it started again from zero. Videos are sent as they are. On 300 drone photos (1.3 GB): Standard
   sent 1.0 GB, Compact 740 MB, and a stopped upload resumed from its last finished batch.
+  Uploads of more than 16 batches (about 3 GB) failed with "Worker error 400: invalid dataset … image(s)
+  missing". When the batches were combined in groups, the group holding dataset.json didn't have all its photos.
+  Fixed on both sides: the Mac now adds dataset.json only in the final combine, and the worker (SplatWork for
+  Linux 1.7.2) keeps such a group as a partial layer instead of refusing it.
 - **Drone surveys: take-off shots left out, and a few stray cameras no longer fail the run.** Photos taken near
   the ground while the rest of the flight is well above (DJI's height above take-off: under 5 m, or under 30 % of the
   flight's usual height) are left out before the camera solve. The new switch *Leave out take-off and landing shots*

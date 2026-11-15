@@ -777,9 +777,17 @@ def _new_dataset_id() -> str:
     return "d" + uuid.uuid4().hex[:11]
 
 
-def _describe_dataset(root: Path, info: Dict[str, Any]) -> None:
+def _describe_dataset(root: Path, info: Dict[str, Any], allow_partial: bool = False) -> None:
+    """``allow_partial``: a dataset.json whose images aren't all here yet (an intermediate /v1/datasets/compose
+    step of a big batched upload) is kept as a layer that can't train on its own, not refused."""
     info["hasDatasetJson"] = (root / "dataset.json").is_file()
     if info["hasDatasetJson"]:
+        if allow_partial:
+            ds = parse_dataset(root, check_files=False)        # malformed → still refused
+            if any(not ds.resolve(c.image).is_file() for c in ds.cameras):
+                info["hasDatasetJson"] = False
+                info["partial"] = True
+                return
         ds = parse_dataset(root, check_files=True)
         info["cameras"] = len(ds.cameras)
         info["hasDepth"] = any(c.depth for c in ds.cameras)
@@ -830,7 +838,7 @@ def _compose_dataset(settings: ServerSettings, layers: List[Dict[str, Any]]) -> 
             link_tree(root, dst, [root])
         info: Dict[str, Any] = {"datasetId": dataset_id, "createdAt": _now_iso(), "bytes": _dir_bytes(files),
                                 "composedOf": [l["datasetId"] for l in layers], "root": "files"}
-        _describe_dataset(files, info)
+        _describe_dataset(files, info, allow_partial=True)
         _write_json_atomic(partial / "meta.json", info)
         os.replace(partial, settings.datasets_dir / dataset_id)
         return info

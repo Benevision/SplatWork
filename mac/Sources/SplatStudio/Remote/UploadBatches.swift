@@ -52,9 +52,14 @@ enum UploadBatches {
     /// Photos and other large files first, then the small files (frames.json, dataset.json, masks) in batches of
     /// their own: those are rewritten on every attempt, and mixing them in would resend a photo batch each time.
     static func batches(_ files: [File], quality: UploadQuality) -> [Batch] {
-        let big = files.filter { isPhoto($0.rel) || $0.size >= 1_048_576 }
-        let small = files.filter { !(isPhoto($0.rel) || $0.size >= 1_048_576) }
-        return pack(big, quality: quality) + pack(small, quality: quality)
+        // .json files (dataset.json) go in the last batch, so they only meet the photos in the final combine: see
+        // composeAll (the worker checks a combined dataset.json against images that may not be there yet)
+        func isJSON(_ f: File) -> Bool { f.rel.lowercased().hasSuffix(".json") }
+        let json = files.filter(isJSON)
+        let rest = files.filter { !isJSON($0) }
+        let big = rest.filter { isPhoto($0.rel) || $0.size >= 1_048_576 }
+        let small = rest.filter { !(isPhoto($0.rel) || $0.size >= 1_048_576) }
+        return pack(big, quality: quality) + pack(small, quality: quality) + pack(json, quality: quality)
     }
 
     static func pack(_ files: [File], quality: UploadQuality) -> [Batch] {
@@ -207,15 +212,19 @@ extension WorkerClient {
             UploadBatches.save(state, stateURL)
             ids.append(id); prog.finished(b.bytes)
         }
-        // combine, at most 16 layers per call (the worker's limit)
+        return try await composeAll(ids)
+    }
+
+    /// Combines uploaded batches, at most 16 layers per call (the worker's limit). The worker checks a combined
+    /// set's dataset.json against its images, so dataset.json (in the last batch) must only meet the photos in
+    /// the final call: batches are folded in from the front, and the last 15 wait for the final call.
+    func composeAll(_ ids: [String]) async throws -> String {
         var layer = ids
-        while layer.count > 1 {
-            var next: [String] = []
-            for chunk in stride(from: 0, to: layer.count, by: 16).map({ Array(layer[$0..<min($0 + 16, layer.count)]) }) {
-                next.append(chunk.count == 1 ? chunk[0] : try await compose(chunk.map { ComposeLayer(datasetId: $0) }))
-            }
-            layer = next
+        while layer.count > 16 {
+            let n = min(16, layer.count - 15)
+            let merged = try await compose(layer[0..<n].map { ComposeLayer(datasetId: $0) })
+            layer = [merged] + layer[n...]
         }
-        return layer[0]
+        return layer.count == 1 ? layer[0] : try await compose(layer.map { ComposeLayer(datasetId: $0) })
     }
 }
