@@ -198,9 +198,9 @@ class Preferences:
 
             if any(_vulkan_usable(d) for d in self._gpu_probe[1]):
                 self._measure_row = action_row("Measure GPU speed",
-                                               "Trains a small test scene for a minute or two on each GPU with the "
-                                               "Vulkan trainer, so slow GPUs are kept out of the way. Run it while "
-                                               "no job is running.")
+                                               "Trains the benchmark scene at full load for about a minute on each "
+                                               "GPU with the Vulkan trainer, so slow GPUs are kept out of the way. "
+                                               "Run it while no job is running.")
                 btn = Gtk.Button(label="Measure", valign=Gtk.Align.CENTER)
                 btn.connect("clicked", lambda b: self._measure_gpus(b))
                 self._measure_row.add_suffix(btn)
@@ -224,10 +224,13 @@ class Preferences:
         btn.set_sensitive(False)
         btn.set_label("Measuring…")
 
+        def say(msg: str) -> None:       # progress from the worker thread: "Measuring RTX 4080 … 20 s"
+            GLib.idle_add(lambda: (self._measure_row.set_subtitle(msg), False)[1])
+
         def work():
             from ..paths import AppPaths
 
-            return gpuspeed.measure_all(devs, AppPaths.from_env().cache_dir / gpuspeed.SCENE_DIR)
+            return gpuspeed.measure_all(devs, AppPaths.from_env().cache_dir, progress=say)
 
         def done(result, error):
             btn.set_sensitive(True)
@@ -235,6 +238,7 @@ class Preferences:
             if error is not None:
                 self._toast(f"Measuring failed: {error}")
                 return
+            self._measure_row.set_subtitle("Done. Measure again after a driver update.")
             failed = [r["name"] for r in result.values() if r.get("error")]
             rows = gpu_choices(cuda, vk, self.s.gpus, gpuspeed.load())
             subs = {r["key"]: r["subtitle"] for r in rows}

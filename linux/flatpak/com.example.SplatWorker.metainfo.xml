@@ -81,6 +81,14 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.5" date="2026-11-16">
+      <description>
+        <p>Measure GPU speed puts each graphics card under real load.</p>
+        <ul>
+          <li>Each GPU trains the standard benchmark scene for about a minute, with progress shown. A GPU it doesn't fit is measured on a smaller scene, and only speeds at the same size are compared. Measure again after updating: older measurements are no longer used.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.4" date="2026-11-15">
       <description>
         <p>Settings → GPUs lists each graphics card once.</p>

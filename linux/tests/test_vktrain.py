@@ -542,21 +542,19 @@ def test_gpu_speed_measurement(build_dir, tmp_path, monkeypatch):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     pytest.importorskip("numpy")
     from splatworker import gpuspeed, slots, vktrain
-    from splatworker.studio.benchmark import BenchmarkSpec
-
     monkeypatch.setenv(vktrain.BINARY_ENV, str(build_dir / "splatwork-vk-train"))
     monkeypatch.setenv(vktrain.ALLOW_CPU_ENV, "1")
     monkeypatch.setenv(gpuspeed.PATH_ENV, str(tmp_path / "gpu-speeds.json"))
-    monkeypatch.setattr(gpuspeed, "STEPS", 40)
-    monkeypatch.setattr(gpuspeed, "_scene_spec", lambda: BenchmarkSpec(width=160, height=120, views=6, splats=5000,
-                                                                       steps=40, measure_from=10))
+    monkeypatch.setattr(gpuspeed, "SIZES", [("tiny", 160, 120, 6, 5000)])
+    monkeypatch.setattr(gpuspeed, "WARMUP", 1.0)
+    monkeypatch.setattr(gpuspeed, "WINDOW", 3.0)
     vktrain._list_cache.clear()
     dev = vktrain.list_devices()["devices"][0]
     out = gpuspeed.measure_all([dev], tmp_path / "scene")
     rec = out[gpuspeed.device_key(dev)]
     assert "error" not in rec, rec
     print(f"gpu speed on {dev['name']}: {rec['stepsPerSecond']:.1f} steps/s")
-    assert rec["stepsPerSecond"] > 0 and rec["steps"] == 40 and rec["splats"] == 5000
+    assert rec["stepsPerSecond"] > 0 and rec["size"] == "tiny" and rec["splats"] == 5000 and rec["windowSteps"] >= 3
     plan = slots.plan(None, [], [dev], "vulkan", gpuspeed.load())
     assert plan[0].speed == rec["stepsPerSecond"] and plan[0].relative == 1.0 and not plan[0].slow
     bad = gpuspeed.measure_all([{**dev, "index": 7, "name": "missing"}], tmp_path / "scene")

@@ -223,16 +223,31 @@ def cmd_measure_gpus(args) -> int:
     if not devs:
         print("no Vulkan GPU to measure (CPU drivers are left out)", file=sys.stderr)
         return 1
-    scene = Path(args.scene_dir).expanduser() if args.scene_dir else AppPaths.from_env().cache_dir / gpuspeed.SCENE_DIR
-    out = gpuspeed.measure_all(devs, scene, progress=lambda m: print(m, file=sys.stderr, flush=True))
-    best = max((r.get("stepsPerSecond") or 0 for r in out.values()), default=0)
+    cache = Path(args.scene_dir).expanduser() if args.scene_dir else AppPaths.from_env().cache_dir
+    last = [""]
+
+    def progress(msg):
+        if msg != last[0]:
+            last[0] = msg
+            print(f"\r{msg:<90}", end="" if "Measuring" in msg else "\n", file=sys.stderr, flush=True)
+    out = gpuspeed.measure_all(devs, cache, progress=progress)
+    print(file=sys.stderr)
+    ok = [r for r in out.values() if not r.get("error")]
+    same = gpuspeed.comparable(ok)
+    best = max((r["stepsPerSecond"] for r in ok), default=0)
     for d in devs:
         r = out[gpuspeed.device_key(d)]
+        name = d.get("label") or d["name"]
         if r.get("error"):
-            print(f"[{d['index']}] {d['name']}: FAILED - {r['error']}")
-        else:
-            print(f"[{d['index']}] {d['name']}: {r['stepsPerSecond']:.2f} steps/s "
-                  f"({r['stepsPerSecond'] / best:.0%} of the fastest), {r['wallSeconds']} s")
+            print(f"[{d['index']}] {name}: FAILED - {r['error']}")
+            continue
+        share = f", {r['stepsPerSecond'] / best:.0%} of the fastest" if same and len(ok) > 1 else ""
+        mem = f", peak {r['peakMemoryMB'] / 1024:.1f} GB" if r.get("peakMemoryMB") else ""
+        print(f"[{d['index']}] {name}: {r['stepsPerSecond']:.2f} steps/s on the {r['size']} scene "
+              f"({r['splats']:,} splats, {r['photos']} photos {r['width']}x{r['height']}; {r['windowSteps']} steps "
+              f"in {r['windowSeconds']} s{share}{mem})")
+    if not same:
+        print("(measured at different scene sizes: the speeds don't compare directly)")
     print(f"saved to {gpuspeed.cache_path()}", file=sys.stderr)
     return 0 if all(not r.get("error") for r in out.values()) else 1
 
@@ -405,12 +420,13 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--poll", type=float, default=1.0, help=argparse.SUPPRESS)
     b.set_defaults(func=cmd_benchmark)
 
-    mg = sub.add_parser("measure-gpus", help="measure each Vulkan GPU's training speed (300 steps of a small scene); "
+    mg = sub.add_parser("measure-gpus", help="measure each Vulkan GPU's training speed (the benchmark scene under "
+                                             "full load, ~1-2 min per GPU); "
                                              "the job slots use it to keep slow GPUs out of the way. Run it while "
                                              "the GPUs are idle")
     mg.add_argument("--device", type=int, action="append", help="only this Vulkan device index (repeatable; "
                                                                  "see `info` → vulkanDevices)")
-    mg.add_argument("--scene-dir", help="where the test scene is built and cached")
+    mg.add_argument("--scene-dir", help="where the test scenes are built and cached (default: the app's cache)")
     mg.set_defaults(func=cmd_measure_gpus)
 
     gc = sub.add_parser("gpu-check", help="check what the GPU runtime can do (cards, PyTorch on CUDA / ROCm / XPU, "

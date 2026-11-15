@@ -6,6 +6,12 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.5 — GPU speed measured under real load:** *Measure GPU speed* trained a tiny scene
+  for about a second on an RTX 4080, too little to load a big GPU. It now trains the standard benchmark scene
+  (48 photos of 1600×1200, 1 M splats) and times 35 s after a 10 s warm-up, about a minute per GPU, with progress
+  shown per GPU. A GPU the scene doesn't fit falls back to a smaller scene, and speeds are compared only at the same
+  size. Peak GPU memory is recorded too. `/v1/info` lists every Vulkan GPU's measured speed (`"vulkanDevices"`),
+  ticked or not. Earlier measurements count as unmeasured: measure again.
 - **SplatWork for Linux 1.7.4 — GPU list fixes:** *Settings → GPUs* listed the RTX 4080 twice and an integrated
   Radeon twice (named after the CPU, ticked) on a PC where the Flatpak sees every GPU through two driver copies.
   Each GPU is now listed once (same PCI address = one GPU, the newest driver copy kept), integrated GPUs are

@@ -1039,6 +1039,27 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             raise ApiError(400, "body must be a JSON object")
         return body
 
+    def vulkan_devices() -> List[Dict[str, Any]]:
+        from . import gpuspeed
+        from .slots import _vulkan_usable
+
+        try:
+            listed = vktrain.list_devices()
+            speeds = gpuspeed.load()
+        except Exception:  # noqa: BLE001
+            return []
+        by_vk = {s.vulkan: s.id for s in manager.slots if s.vulkan is not None}
+        out = []
+        for d in listed.get("devices") or []:
+            if not _vulkan_usable(d):
+                continue
+            r = gpuspeed.record_of(d, speeds) or {}
+            out.append({"index": d["index"], "name": d.get("label") or d.get("name"), "pci": d.get("pci"),
+                        "integrated": bool(d.get("integrated")), "slot": by_vk.get(d["index"]),
+                        "stepsPerSecond": r.get("stepsPerSecond"), "size": r.get("size"), "splats": r.get("splats"),
+                        "photos": r.get("photos"), "peakMemoryMB": r.get("peakMemoryMB"), "measuredAt": r.get("date")})
+        return out
+
     # --------------------------------------------------------------- info
     @app.get("/v1/info")
     def info():
@@ -1097,6 +1118,9 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             # memoryMB, busy}. A slow slot isn't in "gpus": it takes a train job that names it ("slot" in
             # POST /v1/jobs), or a standalone one (no region / cameraIds) while every fast slot is busy.
             "slots": [s.info(busy=s.key in manager.running) for s in manager.slots],
+            # ≥ 1.7.5: every Vulkan GPU (also unticked / slow ones) with its measured speed (null: not measured):
+            # {index, name, pci, integrated, slot, stepsPerSecond, size, splats, photos, peakMemoryMB, measuredAt}
+            "vulkanDevices": vulkan_devices(),
             # ≥ 1.6.0: every graphics card of any vendor (sysfs), also ones jobs can't use (AMD / Intel without a
             # GPU runtime, integrated GPUs): {vendor, name, pci, driver, integrated, memoryMB?, freeMemoryMB?}
             "adapters": gpu_adapters(),

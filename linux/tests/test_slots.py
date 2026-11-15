@@ -196,15 +196,28 @@ def test_info_lists_slots_and_train_jobs_may_name_one(tmp_path, monkeypatch):
     assert [(s["id"], s["vulkan"], s["slow"], s["kinds"]) for s in info["slots"]] == [
         ("cuda:0", 0, False, ["train", "process", "census"]), ("vk:0000:c5:00.0", 1, True, ["train"])]
     assert r.status_code in (400, 404)
+    vk = {d["index"]: d for d in info["vulkanDevices"]}
+    assert set(vk) == {0, 1} and vk[0]["slot"] == "cuda:0" and vk[1]["slot"] == "vk:0000:c5:00.0"
+    from splatworker import gpuspeed
+
+    gpuspeed.save(_speeds(rtx=251.5, m610=4.0))
+    unticked = ServerSettings(data_dir=tmp_path / "b", mdns=False, trainer="vulkan", gpus=[0])
+    with TestClient(create_app(unticked, backend=SubprocessBackend(trainer="vulkan"))) as c:
+        info = c.get("/v1/info").json()
+    vk = {d["index"]: d for d in info["vulkanDevices"]}
+    assert vk[1]["slot"] is None and vk[1]["stepsPerSecond"] == 4.0 and vk[1]["size"] == "standard"
+    assert vk[0]["stepsPerSecond"] == 251.5 and [s["id"] for s in info["slots"]] == ["cuda:0"]
 
 
 # ---------------------------------------------------------- measured speeds
 
-def _speeds(**sps):
+def _speeds(size="standard", **sps):
     from splatworker import gpuspeed
 
     devs = {"rtx": VK_RTX, "m610": VK_610M, "rx": VK_6700}
-    return {gpuspeed.device_key(devs[k]): {"name": devs[k]["name"], "stepsPerSecond": v} for k, v in sps.items()}
+    return {gpuspeed.device_key(devs[k]): {"name": devs[k]["name"], "stepsPerSecond": v, "recipe": gpuspeed.RECIPE,
+                                           "size": size, "peakMemoryMB": 3072}
+            for k, v in sps.items()}
 
 
 def test_slow_comes_from_measured_speeds():
@@ -226,8 +239,10 @@ def test_slow_comes_from_measured_speeds():
 
 def test_measured_speeds_in_the_settings_rows():
     rows = S.gpu_choices([RTX], BENSPC, None, _speeds(rtx=60.0, m610=1.2))
-    assert rows[0]["subtitle"].startswith("16 GB · Measured 60.0 training steps/s (100% of the fastest)")
-    assert "Measured 1.2 training steps/s (2% of the fastest). Much slower" in rows[1]["subtitle"]
+    assert rows[0]["subtitle"].startswith("16 GB · Measured 60.0 training steps/s on the standard scene (100% of "
+                                          "the fastest). Used 3.0 GB.")
+    assert "Measured 1.2 training steps/s on the standard scene (2% of the fastest). Used 3.0 GB. Much slower" in \
+        rows[1]["subtitle"]
     rows = S.gpu_choices([RTX], BENSPC, None, _speeds(rtx=40.0, m610=12.0))
     assert "Fast enough" in rows[1]["subtitle"]
 
@@ -256,11 +271,69 @@ def test_speed_file_round_trip_and_server_refresh(tmp_path, monkeypatch):
     assert not slow.slow
 
 
-def test_config_holds_the_splat_count():
+def test_config_is_the_benchmark_scene_held_fixed():
     from splatworker import gpuspeed
 
     cfg = gpuspeed.config()
-    assert cfg["iterations"] == 300 and cfg["densifyStart"] > 300 and cfg["maxGaussians"] == 200_000
+    assert cfg["maxGaussians"] == 1_000_000 and cfg["maxImageSize"] == 1600
+    assert cfg["densifyStart"] >= cfg["iterations"] >= 1_000_000        # no densification; cancelled when timed
+    assert gpuspeed.config("medium")["maxGaussians"] == 200_000
+
+
+def test_old_recipe_and_different_sizes(tmp_path):
+    from splatworker import gpuspeed
+
+    old = {k: {**v, "recipe": 1} for k, v in _speeds(rtx=251.5, m610=40.0).items()}
+    gpuspeed.save(old)
+    assert gpuspeed.load() == {}                                      # 1.7.3 / 1.7.4's 300-step runs: unmeasured
+    sel = [0, "vk:0000:c5:00.0"]
+    mixed = {**_speeds(rtx=60.0), **_speeds("medium", m610=30.0)}     # the iGPU only fit the medium scene
+    fast, slow = S.plan(sel, [RTX], BENSPC, "vulkan", mixed)
+    assert slow.slow and slow.relative is None and slow.size == "medium" and fast.relative == 1.0
+    rows = S.gpu_choices([RTX], BENSPC, None, mixed)
+    assert "on the medium scene. Used 3.0 GB. Much slower" in rows[1]["subtitle"]
+    assert not gpuspeed.comparable(list(mixed.values())) and gpuspeed.comparable(list(_speeds(rtx=1, m610=1).values()))
+
+
+FAKE_TRAINER = r"""
+import json, sys, threading, time
+args = sys.argv[1:]
+if "benchmark-scene" in args[args.index("--dataset") + 1]:
+    print(json.dumps({"type": "error", "message": "out of device memory"}), flush=True)
+    sys.exit(1)
+stop = threading.Event()
+threading.Thread(target=lambda: (sys.stdin.readline(), stop.set()), daemon=True).start()
+print(json.dumps({"type": "status", "message": "loading images 1/16"}), flush=True)
+step = 0
+while not stop.is_set():
+    time.sleep(0.02)
+    step += 1
+    print(json.dumps({"type": "status", "step": step}), flush=True)
+print(json.dumps({"type": "cancelled"}), flush=True)
+sys.exit(4)
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake programs are POSIX scripts")
+def test_timed_window_and_fallback_to_a_smaller_scene(tmp_path, monkeypatch):
+    from splatworker import gpuspeed
+    import splatworker.studio.benchmark as bench
+
+    prog = tmp_path / "splatwork-vk-train"
+    prog.write_text(f"#!{sys.executable}\n" + FAKE_TRAINER)
+    prog.chmod(0o755)
+    monkeypatch.setenv(vktrain.BINARY_ENV, str(prog))
+    monkeypatch.setattr(gpuspeed, "WARMUP", 0.3)
+    monkeypatch.setattr(gpuspeed, "WINDOW", 0.8)
+    monkeypatch.setattr(bench, "build_scene", lambda root, spec, *a, **k: Path(root))
+    said = []
+    out = gpuspeed.measure_all([VK_610M], tmp_path / "cache", progress=said.append)
+    rec = out[gpuspeed.device_key(VK_610M)]
+    assert rec["size"] == "medium" and rec["splats"] == 200_000 and rec["recipe"] == gpuspeed.RECIPE
+    assert rec["failedSizes"] == ["standard: out of device memory"]
+    assert 10 < rec["stepsPerSecond"] < 60 and rec["windowSteps"] >= 3 and rec["windowSeconds"] >= 0.8
+    assert any("Measuring AMD Radeon 610M (RADV GFX1036) (medium scene): measuring" in m for m in said)
+    assert gpuspeed.load()[gpuspeed.device_key(VK_610M)]["size"] == "medium"
 
 
 # ------------------------------------------- BensPC as 1.7.3 really saw it

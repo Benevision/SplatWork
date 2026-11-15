@@ -390,13 +390,19 @@ Radeon 610M, gfx1036 / RDNA2 — spec sheets say ~0.6 against ~49 TFLOPS, but th
   trains on its matching Vulkan device (same PCI address, else the same name). A GPU only Vulkan can use (key
   `vk:<pci>`) takes train jobs only, and exists only while the Vulkan trainer is the one training. CPU drivers aren't
   slots (except with `SPLATWORK_VK_ALLOW_CPU=1`).
-- **Measured speed** (`splatworker/gpuspeed.py`): each Vulkan device trains the same small scene (the benchmark
-  scene at 800×600, 16 photos, 200 k splats held fixed, 300 steps) through `--device N`; the program's
-  `stepsPerSecond` is the speed. On demand only — *Settings → GPUs → Measure GPU speed* or
+- **Measured speed** (`splatworker/gpuspeed.py`, recipe 2 since 1.7.5): each Vulkan device trains the standard
+  benchmark scene (48 photos of 1600×1200, 1 M splats held fixed, full SH) through `--device N` under full load:
+  10 s warm-up after the first step, then the steps in a 35 s window (timed from the program's status lines) give
+  steps/s, then the run is cancelled — about a minute per GPU. A device the scene doesn't fit (or that fails) falls
+  back to the medium scene (800×600, 16 photos, 200 k); the record has `size`, `splats`, `photos`, `windowSteps`,
+  `windowSeconds` and `peakMemoryMB` (memory in use above idle: sysfs VRAM + GTT for AMD / Intel, NVML for
+  NVIDIA). 1.7.3's recipe (300 steps of the medium scene: ~1 s on the 4080 at 251.5 steps/s, start-up
+  dominated) counts as unmeasured. On demand only — *Settings → GPUs → Measure GPU speed* (progress per GPU) or
   `splatworker measure-gpus [--device N]` — cached in `gpu-speeds.json` (app config dir) per PCI address and driver
   (a driver update needs a new measurement). The server re-reads the file when it changes.
-- **Slow slots**: a slot that measured under 25 % of the fastest measured slot (`SLOW_RATIO`); until two slots are
-  measured, an integrated GPU beside another GPU counts as slow (conservative). Integrated GPUs are off by default ("Use all GPUs" means every GPU but those;
+- **Slow slots**: a slot that measured under 25 % of the fastest slot measured at the same scene size
+  (`SLOW_RATIO`), or that only fit a smaller scene than another slot; until two slots are measured, an integrated GPU
+  beside another GPU counts as slow (conservative). Integrated GPUs are off by default ("Use all GPUs" means every GPU but those;
   the user ticks it in *Settings → GPUs*, which now lists Vulkan-only GPUs). Even when ticked it is not in `/v1/info`
   `"gpus"` (the devices the Mac counts) and takes a train job only when the job names it (`"slot"` in
   `POST /v1/jobs`), or when every fast slot is busy and the job stands alone — not a block (`region` /
@@ -405,7 +411,8 @@ Radeon 610M, gfx1036 / RDNA2 — spec sheets say ~0.6 against ~49 TFLOPS, but th
 - **`/v1/info` `"slots"`**: `[{id ("cuda:0", "vk:0000:c5:00.0", "default"), name, kinds, cuda, vulkan, integrated,
   slow, memoryMB, busy, stepsPerSecond, relativeSpeed}]` (speeds null until measured). **Mac, later**: place jobs
   per slot by measured speed (ComputeScheduler: send a small standalone job to a slow slot by name, size the ETA by
-  the slot), and show the slots on the Compute page; today the Mac ignores "slots" and sees
+  the slot), and show the slots on the Compute page. `/v1/info` `"vulkanDevices"` (1.7.5) lists every Vulkan GPU,
+  ticked or not, with its slot id (or null) and measured speed / size / peak memory. Today the Mac ignores "slots" and sees
   the same "gpus" as before, so existing runs schedule exactly as fast as in 1.7.2.
 - **Settings**: `settings.gpus` / `--gpus` / `SPLATWORKER_GPUS` take CUDA indices and `vk:<pci>` keys
   (`0,vk:0000:c5:00.0`); configs with plain indices work as before.
