@@ -6,6 +6,12 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.7 — Check for Updates…:** in the main menu and in *Settings → Startup and background*.
+  It checks right away and says whether this version is up to date, that a newer one is available, or why it
+  couldn't check. In the Flatpak, *Update and Restart* downloads and installs it straight away, even before the
+  automatic check has noticed it, then restarts. With jobs running or queued it offers *Update After Jobs*
+  (download now, restart once they have finished) or *Stop Jobs and Update*. A source build shows the download page
+  instead, and SplatWork for Windows uses its own installer.
 - **SplatWork for Linux 1.7.6 — processing uses the GPU only for its GPU steps:** a camera solve, masks or frame
   extraction used to hold a GPU for its whole run, so it waited behind training even for CPU work such as COLMAP
   mapping. Processing jobs now run on the CPU (one at a time by default: *Settings → Training → Processing jobs at

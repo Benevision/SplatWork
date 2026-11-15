@@ -74,6 +74,25 @@ def check(current: Optional[str] = None, timeout: float = 8.0, opener=None) -> O
         return None
 
 
+def check_now(current: Optional[str] = None, timeout: float = 8.0, opener=None) -> dict:
+    """Check for Updates… on SplatWork for Windows: like updates.check_now ("newer" | "current" | "error" |
+    "off"), from the latest GitHub release."""
+    current = current or installed_version()
+    url = os.environ.get("SPLATWORKER_UPDATE_URL", RELEASES_API)
+    if not current or not url:
+        return {"status": "off", "info": None, "latest": None, "error": ""}
+    try:
+        with _get(url, timeout, opener) as r:
+            release = json.loads(r.read(2 * 1024 * 1024).decode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "info": None, "latest": None, "error": str(getattr(e, "reason", None) or e)}
+    info = parse_release(release, current)
+    latest = str(release.get("tag_name") or "").lstrip("v") or None
+    if info is not None:
+        return {"status": "newer", "info": info, "latest": info["version"], "error": ""}
+    return {"status": "current", "info": None, "latest": latest, "error": ""}
+
+
 def expected_sha256(sums_text: str, name: str) -> Optional[str]:
     for line in sums_text.splitlines():
         parts = line.split()

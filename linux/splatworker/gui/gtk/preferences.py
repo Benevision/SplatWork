@@ -291,6 +291,14 @@ class Preferences:
         self._switch(g, "auto_update", "Install updates automatically",
                      "New versions from the SplatWork repository are downloaded and installed, and the app "
                      "restarts into them, only while no job is running (Flatpak installs).")
+        from ... import __version__
+
+        row = action_row("Check for updates", f"This is SplatWork for Linux {__version__}.")
+        btn = Gtk.Button(label="Check Now", valign=Gtk.Align.CENTER)
+        btn.connect("clicked", lambda *_: self.window.check_updates_now()
+                    if hasattr(self.window, "check_updates_now") else None)
+        row.add_suffix(btn)
+        g.add(row)
         return g
 
     def _runtime(self) -> Adw.PreferencesGroup:

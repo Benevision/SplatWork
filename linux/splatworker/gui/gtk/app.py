@@ -44,6 +44,7 @@ class SplatWorkerApp(Adw.Application):
                                  ("setup", self._setup, []),
                                  ("help", self._help, ["F1"]),
                                  ("about", self._about, []),
+                                 ("check-updates", lambda *_: self.window and self.window.check_updates_now(), []),
                                  ("show", lambda *_: self._present(), [])):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", cb)

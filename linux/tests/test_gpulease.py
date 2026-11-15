@@ -220,7 +220,7 @@ def test_cpu_limit_and_the_quick_lane(worker):
     for e in ("A:cpu1", "A:gpu", "A:cpu2", "prev:cpu1", "prev:gpu", "prev:cpu2", "C:cpu1", "C:gpu", "C:cpu2"):
         b.ev(e).set()
     wait_for(lambda: all(j.state == "completed" for j in (a, c, prev)))
-    assert m.busy() is False
+    wait_for(lambda: not m.busy())          # the pool frees its place just after the job reports completed
 
 
 def test_cancel_while_waiting_drops_the_request(worker):

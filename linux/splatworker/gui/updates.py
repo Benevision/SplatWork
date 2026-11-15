@@ -21,6 +21,8 @@ from typing import Iterable, List, Optional, Tuple
 from .. import __version__
 
 DEFAULT_URL = "https://benevision.github.io/SplatWork/flatpak/version.json"
+RELEASES_PAGE = "https://github.com/Benevision/SplatWork/releases"
+PRODUCT = "SplatWork for Linux"
 APP_ID = "com.example.SplatWorker"
 UPDATE_COMMAND = f"flatpak update --user {APP_ID}"
 
@@ -39,17 +41,73 @@ def is_newer(remote: str, local: str = __version__) -> bool:
 
 def check(timeout: float = 6.0) -> Optional[dict]:
     """The published version info if it is newer than this app, else None (also on any error)."""
+    r = check_now(timeout)
+    return r["info"] if r["status"] == "newer" else None
+
+
+def check_now(timeout: float = 8.0, current: str = __version__) -> dict:
+    """The manual check (Check for Updates…): {"status": "newer" | "current" | "error" | "off", "info", "latest",
+    "error"} — unlike :func:`check` it tells "up to date" from "couldn't check"."""
     url = update_url()
     if not url:
-        return None
+        return {"status": "off", "info": None, "latest": None, "error": ""}
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": f"SplatWorker/{__version__}", "Cache-Control": "no-cache"})
+        req = urllib.request.Request(url, headers={"User-Agent": f"SplatWorker/{current}", "Cache-Control": "no-cache"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             info = json.loads(r.read(64 * 1024).decode("utf-8"))
         v = str(info.get("version", ""))
-        return info if v and is_newer(v) else None
-    except Exception:
-        return None
+        if not v:
+            return {"status": "error", "info": None, "latest": None, "error": "the version file has no version"}
+    except Exception as e:  # noqa: BLE001
+        reason = getattr(e, "reason", None) or e
+        return {"status": "error", "info": None, "latest": None, "error": str(reason) or type(e).__name__}
+    newer = is_newer(v, current)
+    return {"status": "newer" if newer else "current", "info": info if newer else None, "latest": v, "error": ""}
+
+
+def manual_view(result: dict, *, flatpak: bool, busy: int, current: str = __version__,
+                product: str = PRODUCT) -> dict:
+    """What Check for Updates… shows: {"heading", "body", "responses": [(id, label, appearance)], "default"}.
+    ``flatpak``: the portal can update this install; ``busy``: jobs running or queued (a restart stops them).
+    Response ids: "close", "update" (download, install, restart), "after" (download now, restart when the jobs
+    finish), "now" (stop the jobs and restart when installed), "windows" (the MSI updater), "open" (the
+    download page)."""
+    status = result.get("status")
+    close = ("close", "Close", "default")
+    if status == "off":
+        return {"heading": "Update checks are off", "default": "close", "responses": [close],
+                "body": "SPLATWORKER_UPDATE_URL is set to an empty value, so SplatWork doesn't look for updates."}
+    if status == "error":
+        return {"heading": "Couldn't check for updates", "default": "close", "responses": [close],
+                "body": f"Couldn't check: {result.get('error') or 'unknown error'}. Check the internet connection "
+                        f"and try again."}
+    if status == "current":
+        latest = result.get("latest") or current
+        extra = "" if latest == current else f" (the newest published version is {latest})"
+        return {"heading": "Up to date", "default": "close", "responses": [close],
+                "body": f"{product} {current} is up to date{extra}."}
+    info = result.get("info") or {}
+    v = info.get("version") or result.get("latest") or ""
+    head = f"{product} {v} is available"
+    body = f"You have {current}."
+    later = ("close", "Not Now", "default")
+    if flatpak:
+        if busy:
+            return {"heading": head, "default": "after", "responses": [
+                later, ("now", "Stop Jobs and Update", "destructive"), ("after", "Update After Jobs", "suggested")],
+                "body": body + f" {busy} job(s) are running or queued. Update After Jobs downloads it now and "
+                               "restarts SplatWork when they have finished; Stop Jobs and Update restarts as soon "
+                               "as it is installed (paused training continues after the restart)."}
+        return {"heading": head, "default": "update", "responses": [later, ("update", "Update and Restart", "suggested")],
+                "body": body + " SplatWork downloads it, installs it and restarts into it."}
+    if info.get("msi_url"):
+        return {"heading": head, "default": "windows", "responses": [later, ("windows", "Update…", "suggested")],
+                "body": body + " The installer is downloaded, checked and started; SplatWork closes for it."}
+    page = info.get("page") or RELEASES_PAGE
+    return {"heading": head, "default": "open", "page": page,
+            "responses": [("close", "Close", "default"), ("open", "Open Download Page", "suggested")],
+            "body": body + f" This copy isn't a Flatpak install, so it can't update itself: get the new version "
+                           f"from {page}, or update the Flatpak with:\n\n{UPDATE_COMMAND}"}
 
 
 # ------------------------------------------------------------------ self-update (Flatpak portal)

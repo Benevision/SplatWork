@@ -54,6 +54,7 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
         section.append("How to Connect", "app.help")
         menu.append_section(None, section)
         section2 = Gio.Menu()
+        section2.append("Check for Updates…", "app.check-updates")
         section2.append(f"About {APP_NAME}", "app.about")
         section2.append("Quit", "app.quit")
         menu.append_section(None, section2)
@@ -70,6 +71,9 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
         view.add_top_bar(self.update_banner)
         self._update_info = None
         self._update_busy = False
+        self._restart_after_install = False   # Check for Updates… → Update and Restart / Stop Jobs and Update
+        self._update_after_jobs = False       # Check for Updates… → Update After Jobs (auto-update just this once)
+        self._manual_update = False           # a manual update is in progress: report "nothing on the server yet"
         from .flatpak_update import SelfUpdater
         self.updater = SelfUpdater(lambda: GLib.idle_add(self._render_update))
         self.updater.start()
@@ -423,8 +427,84 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
             self._render_update()
         return False
 
+    def check_updates_now(self) -> None:
+        """Check for Updates… (main menu, Settings): check version.json (Windows: the latest release) now and say
+        what was found; offer to update and restart, or to update once the jobs have finished."""
+        from .. import updates as U
+        from .. import windows_update as W
+
+        windows = W.bundle_root() is not None
+        if hasattr(Adw, "AlertDialog"):
+            waiting = Adw.AlertDialog(heading="Check for Updates", body="Checking…")
+            waiting.add_response("close", "Cancel")
+            waiting.present(self)
+        else:  # pragma: no cover - libadwaita 1.4
+            waiting = None
+        cancelled = {"v": False, "closing": False}
+        if waiting is not None:   # Cancel (closing it ourselves below also emits "response": not a cancel)
+            waiting.connect("response", lambda *_: None if cancelled["closing"] else cancelled.update(v=True))
+
+        def work():
+            result = W.check_now() if windows else U.check_now()
+            GLib.idle_add(done, result)
+
+        def done(result):
+            if waiting is not None and not cancelled["v"]:
+                cancelled["closing"] = True
+                (waiting.force_close if hasattr(waiting, "force_close") else waiting.close)()
+            if cancelled["v"]:
+                return False
+            if result["status"] == "newer":
+                self._set_update_info(result["info"])
+            jobs = self._last_poll.jobs if self._last_poll else []
+            busy = len(U.busy_jobs(jobs)) + len(self.studio.busy_names() if getattr(self, "studio", None) else [])
+            view = U.manual_view(result, flatpak=self.updater.supported and not windows, busy=busy,
+                                 product="SplatWork for Windows" if windows else U.PRODUCT)
+            alert(self, view["heading"], view["body"], view["responses"],
+                  lambda r: self._manual_update_response(r, result, view), default=view["default"], close="close")
+            return False
+        threading.Thread(target=work, daemon=True).start()
+
+    def _manual_update_response(self, response: str, result: dict, view: dict) -> None:
+        from .. import updates as U
+        u = self.updater
+        if response in ("update", "now", "after"):
+            # version.json says newer: ask the portal to update now, even if its monitor hasn't noticed yet
+            u.version = str((result.get("info") or {}).get("version") or u.version)
+            self._manual_update = True
+            if response == "after":
+                self._update_after_jobs = True
+            else:
+                self._restart_after_install = True
+            if u.state == U.INSTALLED:
+                self._render_update()
+                return
+            if u.state != U.DOWNLOADING:
+                u.state, u.error = U.AVAILABLE, ""
+                u.update()
+        elif response == "windows":
+            self._update_info = result.get("info")
+            self._windows_update()
+        elif response == "open":
+            try:
+                Gio.AppInfo.launch_default_for_uri(view.get("page") or U.RELEASES_PAGE, None)
+            except GLib.Error:
+                copy_text(self, view.get("page") or U.RELEASES_PAGE)
+
     def _render_update(self) -> bool:
         from .. import updates as U
+        if self.updater.supported and self._manual_update:
+            st = self.updater.state
+            if st == U.INSTALLED and self._restart_after_install:
+                self._restart_after_install = self._manual_update = False
+                GLib.idle_add(lambda: (self._restart_for_update(), False)[1])
+            elif st == U.IDLE:            # the portal found nothing: the repo mirror doesn't have it yet
+                self._manual_update = self._restart_after_install = self._update_after_jobs = False
+                alert(self, "Update not available yet",
+                      "The new version is published, but the Flatpak repository doesn't have it yet. Try again in "
+                      "a few minutes.")
+            elif st == U.FAILED:
+                self._manual_update = self._restart_after_install = self._update_after_jobs = False
         auto = self.state.settings.auto_update
         if self.updater.supported:
             u = self.updater
@@ -498,7 +578,7 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
     def _auto_update_decide(self, busy: bool) -> bool:
         from .. import updates as U
         self._update_busy = busy
-        action = U.next_action(self.updater.state, self.state.settings.auto_update, busy)
+        action = U.next_action(self.updater.state, self.state.settings.auto_update or self._update_after_jobs, busy)
         if action == "update":
             self.updater.update()
         elif action == "restart":
@@ -534,7 +614,8 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
                 try:
                     msi = W.download(info, self.state.paths.downloads_dir)
                 except Exception as e:  # noqa: BLE001
-                    GLib.idle_add(lambda: alert(self, "Update failed", f"{e}\n\nYou can also download it from "
+                    err = str(e)          # `e` is gone once the except block ends; the lambda runs later
+                    GLib.idle_add(lambda: alert(self, "Update failed", f"{err}\n\nYou can also download it from "
                                                 f"{info.get('page') or 'the GitHub release page'}.") and False)
                     return
 

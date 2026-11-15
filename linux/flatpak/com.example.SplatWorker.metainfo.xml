@@ -81,6 +81,14 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.7" date="2026-11-16">
+      <description>
+        <p>Check for Updates… in the main menu and in Settings.</p>
+        <ul>
+          <li>It says whether SplatWork is up to date, and can download, install and restart into a new version straight away, or once the running jobs have finished.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.6" date="2026-11-16">
       <description>
         <p>Processing runs alongside training.</p>
