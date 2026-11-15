@@ -18,15 +18,19 @@ from .platform_compat import default_data_dir
 from . import PRODUCT_NAME, __version__
 
 
-def _parse_gpus(value: Optional[str]) -> Optional[List[int]]:
+def _parse_gpus(value: Optional[str]):
+    """CUDA indices and vk:<PCI address> keys of GPUs only the Vulkan trainer uses (slots.py), e.g. 0,vk:0000:c5:00.0."""
+    from .slots import parse_key
+
     if value is None or value.strip().lower() in ("", "all"):
         return None
     try:
-        gpus = [int(x) for x in value.split(",") if x.strip() != ""]
+        gpus = [parse_key(x) for x in value.split(",") if x.strip() != ""]
     except ValueError:
-        raise argparse.ArgumentTypeError("--gpus must be a comma separated list of indices, e.g. 0,1")
-    if not gpus or len(set(gpus)) != len(gpus) or any(g < 0 for g in gpus):
-        raise argparse.ArgumentTypeError("--gpus must list distinct non-negative indices")
+        raise argparse.ArgumentTypeError("--gpus must be a comma separated list of GPU indices (e.g. 0,1) "
+                                         "or vk:<PCI address> Vulkan GPUs")
+    if not gpus or len(set(gpus)) != len(gpus):
+        raise argparse.ArgumentTypeError("--gpus must list distinct GPUs")
     return gpus
 
 
@@ -206,24 +210,59 @@ def cmd_splat_info(args) -> int:
     return 0
 
 
+def cmd_measure_gpus(args) -> int:
+    from . import gpuspeed, vktrain
+    from .gui.paths import AppPaths
+    from .slots import _vulkan_usable
+
+    listed = vktrain.list_devices()
+    if not listed["ok"]:
+        print(f"no Vulkan devices: {listed.get('error')}", file=sys.stderr)
+        return 1
+    devs = [d for d in listed["devices"] if _vulkan_usable(d) and (not args.device or d["index"] in args.device)]
+    if not devs:
+        print("no Vulkan GPU to measure (CPU drivers are left out)", file=sys.stderr)
+        return 1
+    scene = Path(args.scene_dir).expanduser() if args.scene_dir else AppPaths.from_env().cache_dir / gpuspeed.SCENE_DIR
+    out = gpuspeed.measure_all(devs, scene, progress=lambda m: print(m, file=sys.stderr, flush=True))
+    best = max((r.get("stepsPerSecond") or 0 for r in out.values()), default=0)
+    for d in devs:
+        r = out[gpuspeed.device_key(d)]
+        if r.get("error"):
+            print(f"[{d['index']}] {d['name']}: FAILED - {r['error']}")
+        else:
+            print(f"[{d['index']}] {d['name']}: {r['stepsPerSecond']:.2f} steps/s "
+                  f"({r['stepsPerSecond'] / best:.0%} of the fastest), {r['wallSeconds']} s")
+    print(f"saved to {gpuspeed.cache_path()}", file=sys.stderr)
+    return 0 if all(not r.get("error") for r in out.values()) else 1
+
+
 def cmd_info(args) -> int:
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     from .gpu import adapters, backend_description, list_gpus, torch_backend, training_available
     from .processing import available_models, splatprep_available
     from . import vktrain
 
+    from .slots import gpu_choices
+
     choice = vktrain.select(os.environ.get("SPLATWORKER_TRAINER", "auto"))
+    vk_devices = vktrain.list_devices()["devices"]
+    cuda = list_gpus()
     print(json.dumps({
         "workerVersion": __version__,
         "backend": backend_description(),
         "trainingAvailable": training_available(),
         "splatprepAvailable": splatprep_available(),
         "models": available_models(),
-        "gpus": list_gpus(),
+        "gpus": cuda,
         "adapters": adapters(),
         "torchBackend": torch_backend(),
         "trainer": vktrain.describe(choice),
         "vulkanTrainer": {"binary": vktrain.binary_path(), **vktrain.device_info()},
+        "vulkanDevices": vk_devices,
+        # Preferences → GPUs: "key" is what --gpus takes, and a GPU-only-Vulkan key is the benchmark --slot id
+        "gpuChoices": [{k: r[k] for k in ("key", "title", "active", "integrated")}
+                       for r in gpu_choices(cuda, vk_devices, None)],
     }, indent=1))
     return 0
 
@@ -267,7 +306,8 @@ def cmd_benchmark(args) -> int:
     try:
         rec = benchmark.run(client, scene, spec, local=False, progress=progress, poll=args.poll,
                             device_id="local" if loopback else url.rstrip("/"),
-                            name="This PC" if loopback else None, tmp_dir=paths.cache_dir / "tmp")
+                            name="This PC" if loopback else None, tmp_dir=paths.cache_dir / "tmp",
+                            slot=args.slot)
     except KeyboardInterrupt:
         print("interrupted (the benchmark job may still be running on the worker)", file=sys.stderr)
         return 130
@@ -281,6 +321,8 @@ def cmd_benchmark(args) -> int:
         rec["uploadMBps"] = rec["downloadMBps"] = None       # loopback "network" speed means nothing
     if args.quick:
         print("(quick run: a tiny scene, not comparable - not saved)", file=sys.stderr)
+    elif args.slot:
+        print(f"(one GPU slot, {args.slot} - not saved)", file=sys.stderr)
     else:
         benchmark.save_benchmark(config_dir, rec)
         print(f"saved to {config_dir / benchmark.FILE}", file=sys.stderr)
@@ -303,7 +345,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--name", default=os.environ.get("SPLATWORKER_NAME"),
                    help="display name advertised over Bonjour (default: hostname)")
     s.add_argument("--gpus", type=_parse_gpus, default=_parse_gpus(os.environ.get("SPLATWORKER_GPUS")),
-                   help="comma separated GPU indices, one job per GPU (default: all)")
+                   help="comma separated GPU indices or vk:<PCI address> Vulkan GPUs, one job per GPU "
+                        "(default: all but integrated GPUs beside faster ones)")
     s.add_argument("--no-mdns", action="store_true", help="do not advertise _splatworker._tcp")
     s.add_argument("--advertise-ip", action="append", help="IPv4 address to advertise (repeatable)")
     s.add_argument("--max-upload-gb", type=float, default=20.0)
@@ -357,8 +400,18 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--config-dir", help="where benchmarks.json is kept (default: the app's config dir)")
     b.add_argument("--scene-dir", help="where the synthetic scene is built and cached")
     b.add_argument("--quick", action="store_true", help="tiny scene and 200 steps: checks it works, not saved")
+    b.add_argument("--slot", help="run on this GPU slot only (an id from `info` / /v1/info \"slots\", e.g. "
+                                  "vk:0000:c5:00.0); not saved")
     b.add_argument("--poll", type=float, default=1.0, help=argparse.SUPPRESS)
     b.set_defaults(func=cmd_benchmark)
+
+    mg = sub.add_parser("measure-gpus", help="measure each Vulkan GPU's training speed (300 steps of a small scene); "
+                                             "the job slots use it to keep slow GPUs out of the way. Run it while "
+                                             "the GPUs are idle")
+    mg.add_argument("--device", type=int, action="append", help="only this Vulkan device index (repeatable; "
+                                                                 "see `info` → vulkanDevices)")
+    mg.add_argument("--scene-dir", help="where the test scene is built and cached")
+    mg.set_defaults(func=cmd_measure_gpus)
 
     gc = sub.add_parser("gpu-check", help="check what the GPU runtime can do (cards, PyTorch on CUDA / ROCm / XPU, "
                                           "small GPU workloads, gsplat) and print a report to paste")

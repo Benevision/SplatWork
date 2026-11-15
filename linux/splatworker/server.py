@@ -193,14 +193,18 @@ class Job:
 
 
 class JobManager:
-    def __init__(self, settings: ServerSettings, backend: Backend, devices: List[Optional[int]]):
+    def __init__(self, settings: ServerSettings, backend: Backend, devices: List[Any]):
+        """``devices``: the job slots (slots.Slot), or CUDA indices / None (one slot each)."""
+        from .slots import Slot
+
         self.settings = settings
         self.backend = backend
-        self.devices = devices or [None]
+        self.slots: List[Slot] = [d if isinstance(d, Slot) else Slot(key=d, cuda=d) for d in (devices or [None])]
+        self.devices = [s.key for s in self.slots]
         self.jobs: Dict[str, Job] = {}
         self.queue: Deque[str] = collections.deque()
         self.cond = threading.Condition()
-        self.running: Dict[Optional[int], str] = {}
+        self.running: Dict[Any, str] = {}      # slot key → job id
         self.stopping = False
         self.threads: List[threading.Thread] = []
 
@@ -236,8 +240,13 @@ class JobManager:
                 job.log("job was interrupted by a worker restart")
             loaded.append(job)
         loaded.sort(key=lambda j: j.status.get("createdAt") or "")
+        ids = {s.id for s in self.slots}
         for job in loaded:
             self.jobs[job.id] = job
+            if job.spec.get("slot") and job.spec["slot"] not in ids:
+                # its GPU was unticked (or removed) since: any GPU may run it now
+                job.log(f"GPU slot {job.spec.pop('slot')} no longer exists; the job runs on any GPU")
+                job.persist()
             if job.spec.get("kind") == "pipeline":
                 continue
             if job.state == "paused" and job.status.get("origin") != "local":
@@ -248,9 +257,9 @@ class JobManager:
                 self.queue.append(job.id)
 
     def start(self) -> None:
-        for dev in self.devices:
-            t = threading.Thread(target=self._worker_loop, args=(dev,), daemon=True,
-                                 name=f"splatworker-gpu{dev}")
+        for slot in self.slots:
+            t = threading.Thread(target=self._worker_loop, args=(slot,), daemon=True,
+                                 name=f"splatworker-gpu-{slot.id}")
             t.start()
             self.threads.append(t)
         from .pipeline import start_runner
@@ -283,7 +292,7 @@ class JobManager:
     # ---------------------------------------------------------------- queue
     def submit(self, kind: str, dataset_id: str, name: str, payload_key: str,
                payload: Dict[str, Any], total_steps: int, priority: int = 0, origin: Optional[str] = None,
-               parent: Optional[str] = None) -> Job:
+               parent: Optional[str] = None, slot: Optional[str] = None) -> Job:
         prefix = {"train": "j", "census": "c"}.get(kind, "p")
         job_id = prefix + uuid.uuid4().hex[:11]
         job_dir = self.settings.jobs_dir / job_id
@@ -291,6 +300,8 @@ class JobManager:
         spec = {"kind": kind, "datasetId": dataset_id, "name": name, payload_key: payload}
         if parent:
             spec["parentJobId"] = parent
+        if slot:
+            spec["slot"] = slot          # runs on this slot only (/v1/info "slots" id)
         status = {
             "jobId": job_id, "kind": kind, "name": name, "state": "queued",
             "step": 0, "totalSteps": total_steps, "loss": None, "psnr": None,
@@ -553,20 +564,60 @@ class JobManager:
                    and j.state not in FINAL_STATES for j in self.jobs.values())
 
     # --------------------------------------------------------------- worker
-    def _next_job(self, device: Optional[int]) -> Optional[Job]:
+    def slot_takes(self, slot, job: Job) -> bool:
+        """(Holding ``cond``.) Whether ``slot`` may start ``job`` now (slots.py: kinds, named slots, slow slots)."""
+        from .slots import standalone
+
+        kind = job.spec.get("kind")
+        named = job.spec.get("slot")
+        if named:
+            return named == slot.id
+        if not slot.takes_kind(kind):
+            return False
+        if slot.slow:
+            if kind != "train" or not standalone(job.spec):
+                return False
+            fast = [s for s in self.slots if not s.slow and s.takes_kind("train")]
+            return all(s.key in self.running for s in fast)
+        return True
+
+    def _slot(self, slot):
+        """A Slot, or a slot key (a CUDA index / None, as callers passed before slots existed)."""
+        from .slots import Slot
+
+        if isinstance(slot, Slot):
+            return slot
+        return next((s for s in self.slots if s.key == slot), None) or Slot(key=slot, cuda=slot)
+
+    def refresh_speeds(self) -> None:
+        """Measured GPU speeds (gpuspeed.py) → each slot's speed and ``slow``; the file is re-read when it changes."""
+        from . import gpuspeed
+        from .slots import apply_speeds
+
+        if any(s.device for s in self.slots):
+            try:
+                apply_speeds(self.slots, gpuspeed.load())
+            except Exception:  # noqa: BLE001 - a broken file must not stop scheduling
+                log.exception("reading the measured GPU speeds failed")
+
+    def _next_job(self, slot) -> Optional[Job]:
+        slot = self._slot(slot)
         with self.cond:
             while True:
                 if self.stopping:
                     return None
                 self._housekeep_locked()
-                # drop stale entries, then take the highest priority (ties: oldest first). Nothing running is
-                # ever pre-empted; priority only decides which queued job a free GPU takes next.
+                self.refresh_speeds()
+                # drop stale entries, then take the highest priority (ties: oldest first) of the jobs this slot
+                # may run. Nothing running is ever pre-empted; priority only decides which queued job a free GPU
+                # takes next.
                 live = [j for j in self.queue if j in self.jobs and self.jobs[j].state == "queued"]
                 self.queue = collections.deque(live)
-                if live:
-                    best = max(live, key=lambda j: (int(self.jobs[j].status.get("priority") or 0), -live.index(j)))
+                mine = [j for j in live if self.slot_takes(slot, self.jobs[j])]
+                if mine:
+                    best = max(mine, key=lambda j: (int(self.jobs[j].status.get("priority") or 0), -live.index(j)))
                     self.queue.remove(best)
-                    self.running[device] = best
+                    self.running[slot.key] = best
                     job = self.jobs[best]
                     # taken: no longer "queued" from here on, so a pause / resume / cancel arriving before the job
                     # really starts goes through the running path (events the job checks) instead of re-queueing it
@@ -605,34 +656,39 @@ class JobManager:
         self.queue.append(job.id)
         self.cond.notify()
 
-    def _worker_loop(self, device: Optional[int]) -> None:
+    def _worker_loop(self, slot) -> None:
         while True:
-            job = self._next_job(device)
+            job = self._next_job(slot)
             if job is None:
                 return
             try:
-                self._run_job(job, device)
+                self._run_job(job, slot)
             except Exception:  # pragma: no cover - defensive
                 log.exception("unexpected error running job %s", job.id)
             finally:
                 with self.cond:
-                    self.running.pop(device, None)
+                    self.running.pop(slot.key, None)
+                    self.cond.notify_all()     # a slow slot may now take a job a fast one left
                 if job.deleted:
                     shutil.rmtree(job.dir, ignore_errors=True)
 
-    def _run_job(self, job: Job, device: Optional[int]) -> None:
+    def _run_job(self, job: Job, slot) -> None:
         from .gpu import list_gpus
 
-        gpu_name = None
-        if device is not None:
+        slot = self._slot(slot)
+        device = slot.cuda
+        gpu_name = slot.name
+        if gpu_name is None and device is not None:
             gpus = list_gpus([device])
             gpu_name = gpus[0]["name"] if gpus else f"GPU {device}"
         resuming = job.spec.get("kind") == "train" and _has_resume(job.dir)
         prior = float(job.status.get("elapsedSeconds") or 0.0) if resuming else 0.0
         job.started_monotonic = time.monotonic() - prior     # elapsed time carries on across a pause
         job.update(persist=True, state="loading", message="resuming" if resuming else "starting", gpu=gpu_name)
-        job.log(f"starting on {'GPU ' + str(device) if device is not None else 'default device'}"
-                f"{' (' + gpu_name + ')' if gpu_name else ''}")
+        where = ("GPU " + str(device) if device is not None else
+                 "Vulkan device " + str(slot.vulkan) if slot.vulkan is not None else "default device")
+        job.log(f"starting on {where}{' (' + gpu_name + ')' if gpu_name else ''}"
+                f"{' — a slower GPU, used while the faster ones are busy' if slot.slow else ''}")
 
         dataset_dir = dataset_root(self.settings, job.spec["datasetId"])
         if dataset_dir is None:
@@ -667,7 +723,7 @@ class JobManager:
         ctx = JobContext(
             job_id=job.id, kind=kind, job_dir=job.dir, dataset_dir=dataset_dir,
             spec=job.spec.get({"train": "config", "census": "census"}.get(kind, "request")) or {},
-            device_index=device, status=status, log=job.log, preview=preview,
+            device_index=device, vulkan_index=slot.vulkan, status=status, log=job.log, preview=preview,
             cancel_event=job.cancel_event, pause_event=job.pause_event, checkpoint_event=job.checkpoint_event,
             checkpoint=checkpoint,
         )
@@ -900,10 +956,19 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         shutil.rmtree(leftover, ignore_errors=True)
 
     if devices is None:
-        if settings.gpus is not None:
-            devices = list(settings.gpus)
-        else:
-            devices = [g["index"] for g in list_gpus()] or [None]
+        from .slots import plan
+
+        try:
+            trainer = backend.trainer_choice().get("trainer")
+        except Exception:  # noqa: BLE001
+            trainer = None
+        vk_devices = vktrain.list_devices()["devices"] if trainer == "vulkan" else []
+        from . import gpuspeed
+
+        devices = plan(settings.gpus, list_gpus(), vk_devices, trainer, gpuspeed.load())
+        for s in devices:
+            log.info("job slot %s: %s%s", s.id, s.name or "default device",
+                     " (slow: only standalone train jobs while the faster GPUs are busy)" if s.slow else "")
     manager = JobManager(settings, backend, devices)
     manager.load()
 
@@ -977,9 +1042,11 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     # --------------------------------------------------------------- info
     @app.get("/v1/info")
     def info():
+        with manager.cond:
+            manager.refresh_speeds()
         gpus = [{"name": g["name"], "memoryMB": g["memoryMB"], "freeMemoryMB": g["freeMemoryMB"],
                  "vendor": g.get("vendor", "nvidia")}
-                for g in list_gpus(settings.gpus)]
+                for g in list_gpus([k for k in settings.gpus if isinstance(k, int)] if settings.gpus else None)]
         try:
             caps = backend.capabilities()
         except Exception:
@@ -989,10 +1056,16 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         except Exception as e:  # noqa: BLE001
             choice = {"trainer": None, "reason": str(e)}
         trainer_info = vktrain.describe(choice)
-        if choice.get("trainer") == "vulkan" and not gpus:
-            entry = vktrain.gpu_entry()      # AMD / Intel without a PyTorch GPU runtime: the Vulkan device
-            if entry is not None:
-                gpus = [entry]
+        if choice.get("trainer") == "vulkan":
+            # GPUs only the Vulkan trainer uses (AMD / Intel, no PyTorch GPU runtime): fast ones count as devices;
+            # slow ones (an integrated GPU beside a faster one) only appear in "slots"
+            gpus += [{"name": s.name, "memoryMB": s.memory_mb or 0, "freeMemoryMB": s.memory_mb or 0,
+                      "vendor": s.vendor or "other"}
+                     for s in manager.slots if s.vulkan_only and not s.slow]
+            if not gpus:
+                entry = vktrain.gpu_entry()
+                if entry is not None:
+                    gpus = [entry]
         if "process" in caps or "frames" in caps:
             caps = caps + ["chain"]       # outputDatasetId, /v1/datasets/compose, /v1/datasets/{id}/archive.zip
             caps = caps + ["stream"]      # ≥ 1.3.13: training images streamed from disk when RAM is short
@@ -1020,6 +1093,10 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             "version": PROTOCOL_VERSION,
             "workerVersion": __version__,
             "gpus": gpus,
+            # ≥ 1.7.3: the job slots, one job each at a time — {id, name, kinds, cuda, vulkan, integrated, slow,
+            # memoryMB, busy}. A slow slot isn't in "gpus": it takes a train job that names it ("slot" in
+            # POST /v1/jobs), or a standalone one (no region / cameraIds) while every fast slot is busy.
+            "slots": [s.info(busy=s.key in manager.running) for s in manager.slots],
             # ≥ 1.6.0: every graphics card of any vendor (sysfs), also ones jobs can't use (AMD / Intel without a
             # GPU runtime, integrated GPUs): {vendor, name, pci, driver, integrated, memoryMB?, freeMemoryMB?}
             "adapters": gpu_adapters(),
@@ -1333,9 +1410,14 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             raise ApiError(400, f"invalid config: {e}")
         # Keep only keys the client sent, so context-dependent defaults resolve in the trainer.
         cfg_dict = {k: v for k, v in cfg.to_dict().items() if k in cfg.explicit}
+        slot = body.get("slot")
+        if slot is not None:
+            ids = [s.id for s in manager.slots if s.takes_kind("train")]
+            if not isinstance(slot, str) or slot not in ids:
+                raise ApiError(400, f"slot must be one of {ids} (/v1/info \"slots\")")
         job = manager.submit("train", dataset_id, _name(body, dataset_id), "config", cfg_dict,
                              total_steps=cfg.iterations, priority=_priority(request, body),
-                             origin=_origin(request))
+                             origin=_origin(request), slot=slot)
         return {"jobId": job.id}
 
     @app.post("/v1/process")

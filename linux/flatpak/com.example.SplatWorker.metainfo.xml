@@ -81,6 +81,16 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.3" date="2026-11-15">
+      <description>
+        <p>Every graphics card can train with the Vulkan trainer.</p>
+        <ul>
+          <li>With the Vulkan trainer chosen, each GPU trains its own job, so a computer with two GPUs trains two jobs at once.</li>
+          <li>Settings → GPUs lists AMD, Intel and integrated GPUs too. An integrated GPU next to a faster card starts unticked; when ticked it only takes a job on its own while the faster GPUs are busy.</li>
+          <li>Measure GPU speed (Settings → GPUs) trains a small scene on each GPU; a GPU under a quarter of the fastest one's speed is kept out of the way.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.2" date="2026-11-15">
       <description>
         <p>Large uploads from the Mac no longer fail when they are combined on this computer.</p>

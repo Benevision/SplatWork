@@ -294,10 +294,11 @@ def _upload_zip(client, folder: Path, tmp_dir: Path) -> tuple:
 def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: bool = True,
         progress: Optional[Callable[[str, float], None]] = None, cancelled: Optional[Callable[[], bool]] = None,
         priority: int = 1, poll: float = 1.0, device_id: str = "local", name: Optional[str] = None,
-        software: Optional[str] = None, tmp_dir: Optional[Path] = None) -> Dict[str, Any]:
+        software: Optional[str] = None, tmp_dir: Optional[Path] = None, slot: Optional[str] = None) -> Dict[str, Any]:
     """Build the scene, train it on ``client``'s worker and return the result record (not saved).
 
-    ``local``: register the folder with the desktop app's own server (no copy) instead of uploading a zip."""
+    ``local``: register the folder with the desktop app's own server (no copy) instead of uploading a zip.
+    ``slot``: run on that job slot of the worker (``/v1/info`` "slots" id, worker ≥ 1.7.3)."""
     say = progress or (lambda m, f: None)
     stop = cancelled or (lambda: False)
     scene = build_scene(scene_root, spec, lambda m, f: say(m, 0.1 * f), stop)
@@ -314,6 +315,8 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
         body = {"datasetId": did, "config": spec.training_config(), "name": "SplatWork benchmark"}
         if local:
             body["priority"] = priority
+        if slot:
+            body["slot"] = slot
         job = client.post("/v1/jobs", body)["jobId"]
         samples: List[tuple] = []
         t_start = time.perf_counter()

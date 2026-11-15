@@ -372,6 +372,60 @@ pixel that raster_bwd adds to the background term (sky colour, sky penalty, the 
   disk-streaming mode (photos stay in RAM as 8-bit, like the CUDA trainer's in-memory mode); Auto clean without
   gsplat; Windows (the program isn't built there yet).
 
+### Job slots per GPU (1.7.3)
+
+With the Vulkan trainer chosen, every Vulkan GPU can be its own job slot (BensPC: the RTX 4080 and its integrated
+Radeon 610M, gfx1036 / RDNA2 — spec sheets say ~0.6 against ~49 TFLOPS, but the slots go by measured speed).
+
+- **Program**: `splatwork-vk-train --list-devices` — one JSON line `{"devices": [{index, name, driver, deviceType,
+  vendorID, deviceID, memoryMB, pci}], "interface"}` (`pci` from `VK_EXT_pci_bus_info`, null when the driver can't
+  say; lavapipe can't). The worker caches it (`vktrain.list_devices`) and passes a job's slot device as `--device N`.
+- **Slots** (`splatworker/slots.py`): one per physical GPU. A CUDA GPU (key: its index) takes every kind of job and
+  trains on its matching Vulkan device (same PCI address, else the same name). A GPU only Vulkan can use (key
+  `vk:<pci>`) takes train jobs only, and exists only while the Vulkan trainer is the one training. CPU drivers aren't
+  slots (except with `SPLATWORK_VK_ALLOW_CPU=1`).
+- **Measured speed** (`splatworker/gpuspeed.py`): each Vulkan device trains the same small scene (the benchmark
+  scene at 800×600, 16 photos, 200 k splats held fixed, 300 steps) through `--device N`; the program's
+  `stepsPerSecond` is the speed. On demand only — *Settings → GPUs → Measure GPU speed* or
+  `splatworker measure-gpus [--device N]` — cached in `gpu-speeds.json` (app config dir) per PCI address and driver
+  (a driver update needs a new measurement). The server re-reads the file when it changes.
+- **Slow slots**: a slot that measured under 25 % of the fastest measured slot (`SLOW_RATIO`); until two slots are
+  measured, an integrated GPU beside another GPU counts as slow (conservative). Integrated GPUs are off by default ("Use all GPUs" means every GPU but those;
+  the user ticks it in *Settings → GPUs*, which now lists Vulkan-only GPUs). Even when ticked it is not in `/v1/info`
+  `"gpus"` (the devices the Mac counts) and takes a train job only when the job names it (`"slot"` in
+  `POST /v1/jobs`), or when every fast slot is busy and the job stands alone — not a block (`region` /
+  `cameraIds`) and not a step of a whole-pipeline job — so a block run never waits on it. An integrated GPU that is
+  the only GPU is an ordinary slot.
+- **`/v1/info` `"slots"`**: `[{id ("cuda:0", "vk:0000:c5:00.0", "default"), name, kinds, cuda, vulkan, integrated,
+  slow, memoryMB, busy, stepsPerSecond, relativeSpeed}]` (speeds null until measured). **Mac, later**: place jobs
+  per slot by measured speed (ComputeScheduler: send a small standalone job to a slow slot by name, size the ETA by
+  the slot), and show the slots on the Compute page; today the Mac ignores "slots" and sees
+  the same "gpus" as before, so existing runs schedule exactly as fast as in 1.7.2.
+- **Settings**: `settings.gpus` / `--gpus` / `SPLATWORKER_GPUS` take CUDA indices and `vk:<pci>` keys
+  (`0,vk:0000:c5:00.0`); configs with plain indices work as before.
+- **CLI**: `splatworker info` adds `vulkanDevices` and `gpuChoices` (the keys); `splatworker benchmark --slot ID`
+  runs the standard benchmark on one slot (not saved).
+- **Tests**: `tests/test_slots.py` (fake GPU lists: BensPC, AMD-only, integrated-only laptop; measured speeds;
+  scheduling; `/v1/info`; settings) and, on lavapipe in `test_vktrain.py`, `--list-devices` and a real measurement.
+
+**Test on BensPC (the first real RDNA2 run, same family as the RX 6700 XT).** In a terminal on BensPC, once the app
+shows SplatWork for Linux 1.7.3:
+
+1. `flatpak run --command=splatwork-vk-train com.example.SplatWorker --list-devices` — the 4080 and the 610M should
+   be listed (the 610M with `"deviceType":"integrated"` and a `pci` address; note it), plus the driver lines.
+2. **Speed first**, with no job running: `flatpak run --command=splatworker com.example.SplatWorker measure-gpus`
+   (or *Settings → GPUs → Measure GPU speed*). It trains the same small scene on each GPU and prints steps/s and
+   each GPU's share of the fastest. Send back that output. If the 610M fails or hangs here:
+   `journalctl -k -b | grep -i amdgpu | tail -40` (GPU resets).
+3. *Settings → Training → Trainer*: Vulkan. *Settings → GPUs*: turn off *Use all GPUs*, tick the RTX 4080 and the
+   Radeon 610M (the server restarts). The rows now show the measured speeds.
+4. Quality on the same set: `flatpak run --command=splatworker com.example.SplatWorker benchmark --quick --slot
+   vk:<pci>`, then `… --slot cuda:0`; if both finish, the full benchmark the same way (`… benchmark --slot …`,
+   long on the 610M). Send back steps/s and the final PSNR of each (job logs, *Jobs* page → log); the PSNRs
+   should be within ~0.5 dB. The 610M's job log says "starting on Vulkan device 1 (AMD Radeon 610M …)".
+5. Afterwards untick the 610M (or turn *Use all GPUs* back on) unless you want it to pick up standalone jobs while
+   the 4080 is busy (it does only if it measured under 25 % of the 4080).
+
 ### Stages (each checked in with the user)
 
 1. Kernels: projection, sort, tile binning, rasterisation forward / backward, L1 + SSIM loss, Adam — with gradient

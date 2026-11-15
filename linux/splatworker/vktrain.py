@@ -80,6 +80,34 @@ def device_info(binary: Optional[str] = None, timeout: float = 60.0, refresh: bo
         return info
 
 
+_list_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def list_devices(binary: Optional[str] = None, timeout: float = 60.0, refresh: bool = False) -> Dict[str, Any]:
+    """``splatwork-vk-train --list-devices``: {"ok", "devices": [{index, name, deviceType, memoryMB, vendorID,
+    deviceID, driver, pci}], "error"?}; cached per program path. CPU drivers are listed (slots.py leaves them out)."""
+    binary = binary or binary_path()
+    if not binary:
+        return {"ok": False, "devices": [], "error": f"{BINARY_NAME} is not installed"}
+    with _info_lock:
+        if not refresh and binary in _list_cache:
+            return _list_cache[binary]
+        try:
+            r = subprocess.run([binary, "--list-devices"], capture_output=True, text=True, timeout=timeout)
+            line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "")
+            if r.returncode != 0 or not line:
+                err = (r.stderr or r.stdout).strip().splitlines()
+                out = {"ok": False, "devices": [], "error": (err[-1] if err else f"exit code {r.returncode}")[:300]}
+            else:
+                data = json.loads(line)
+                devs = [d for d in data.get("devices") or [] if isinstance(d, dict) and isinstance(d.get("index"), int)]
+                out = {"ok": True, "devices": devs}
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            out = {"ok": False, "devices": [], "error": f"{type(e).__name__}: {e}"[:300]}
+        _list_cache[binary] = out
+        return out
+
+
 def usable(info: Dict[str, Any]) -> Optional[str]:
     """Why the probed device can't train (None = it can)."""
     if not info.get("ok"):
@@ -210,12 +238,15 @@ def fill_depth_priors(dataset_dir: str, config: Dict[str, Any], log, status, sho
 # subprocess entry (the job process; same queue protocol as trainer.subprocess_entry)
 # ---------------------------------------------------------------------------
 
-def command(binary: str, dataset_dir: str, job: Path, config_file: Path) -> List[str]:
+def command(binary: str, dataset_dir: str, job: Path, config_file: Path, device: Optional[int] = None) -> List[str]:
+    """``device``: the job slot's Vulkan device index; without one, SPLATWORK_VK_DEVICE, else the program's pick."""
     args = [binary, "train", "--dataset", str(dataset_dir), "--out", str(job / "result.ply"),
             "--config", str(config_file), "--job-dir", str(job)]
     if (job / "resume.vkstate").is_file():
         args += ["--resume", str(job / "resume.vkstate")]
-    if os.environ.get(DEVICE_ENV, "").strip().isdigit():
+    if device is not None:
+        args += ["--device", str(int(device))]
+    elif os.environ.get(DEVICE_ENV, "").strip().isdigit():
         args += ["--device", os.environ[DEVICE_ENV].strip()]
     return args
 
@@ -240,7 +271,7 @@ def subprocess_entry(dataset_dir: str, config: dict, job_dir: str, device_index:
             return
         cfg_file = job / "vk-config.json"
         cfg_file.write_text(json.dumps(config), encoding="utf-8")
-        run_program(command(binary, dataset_dir, job, cfg_file), queue, cancel_event, pause_event,
+        run_program(command(binary, dataset_dir, job, cfg_file, device_index), queue, cancel_event, pause_event,
                     checkpoint_event)
     except BaseException as e:  # noqa: BLE001
         queue.put(("log", traceback.format_exc()))

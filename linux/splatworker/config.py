@@ -329,7 +329,7 @@ class ServerSettings:
     port: int = 7878
     token: Optional[str] = None
     name: Optional[str] = None
-    gpus: Optional[List[int]] = None          # None = all visible GPUs
+    gpus: Optional[List[Any]] = None          # None = every GPU but integrated ones beside others (slots.py)
     mdns: bool = True
     advertise_ips: Optional[List[str]] = None  # None = auto-detect
     max_upload_bytes: int = 20 * 1024 ** 3     # compressed zip size

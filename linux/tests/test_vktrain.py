@@ -491,6 +491,18 @@ def test_worker_job_pause_resume_and_info(build_dir, dataset, tmp_path, monkeypa
         "cpu", "discrete", "integrated", "virtual", "other")
     assert vktrain.select("vulkan")["trainer"] == "vulkan"
 
+    # --list-devices and the job slots (slots.py): lavapipe is one device, its slot passes --device 0
+    from splatworker import slots
+
+    vktrain._list_cache.clear()
+    listed = vktrain.list_devices()
+    assert listed["ok"] and listed["devices"], listed
+    dev = listed["devices"][0]
+    assert dev["index"] == 0 and dev["name"] == info["device"] and dev["deviceType"] == info["deviceType"]
+    assert set(dev) >= {"name", "driver", "deviceType", "vendorID", "deviceID", "memoryMB", "pci"}
+    plan = slots.plan(None, [], listed["devices"], "vulkan")
+    assert plan[0].vulkan == 0 and not plan[0].slow
+
     job = tmp_path / "job"
     job.mkdir()
     cfg = {**BASE, "iterations": 300, "previewInterval": 100, "evalInterval": 100}
@@ -499,7 +511,7 @@ def test_worker_job_pause_resume_and_info(build_dir, dataset, tmp_path, monkeypa
         q = queue.Queue()
         cancel, pause, ckpt = threading.Event(), threading.Event(), threading.Event()
         t = threading.Thread(target=vktrain.subprocess_entry,
-                             args=(str(dataset), cfg, str(job), None, q, cancel, pause, ckpt))
+                             args=(str(dataset), cfg, str(job), plan[0].vulkan, q, cancel, pause, ckpt))
         t.start()
         msgs = []
         while True:
@@ -521,3 +533,30 @@ def test_worker_job_pause_resume_and_info(build_dir, dataset, tmp_path, monkeypa
     assert stats["trainer"] == "vulkan" and stats["numGaussians"] > 0 and stats["steps"] < 300
     assert stats["psnr"] > 15
     assert (job / "result.ply").is_file() and not (job / "resume.vkstate").exists()
+
+
+def test_gpu_speed_measurement(build_dir, tmp_path, monkeypatch):
+    """gpuspeed.py through the real program on lavapipe (a smaller scene than on a GPU): a record with the
+    program's steps/s, saved per device and driver, and read back into the slot."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    pytest.importorskip("numpy")
+    from splatworker import gpuspeed, slots, vktrain
+    from splatworker.studio.benchmark import BenchmarkSpec
+
+    monkeypatch.setenv(vktrain.BINARY_ENV, str(build_dir / "splatwork-vk-train"))
+    monkeypatch.setenv(vktrain.ALLOW_CPU_ENV, "1")
+    monkeypatch.setenv(gpuspeed.PATH_ENV, str(tmp_path / "gpu-speeds.json"))
+    monkeypatch.setattr(gpuspeed, "STEPS", 40)
+    monkeypatch.setattr(gpuspeed, "_scene_spec", lambda: BenchmarkSpec(width=160, height=120, views=6, splats=5000,
+                                                                       steps=40, measure_from=10))
+    vktrain._list_cache.clear()
+    dev = vktrain.list_devices()["devices"][0]
+    out = gpuspeed.measure_all([dev], tmp_path / "scene")
+    rec = out[gpuspeed.device_key(dev)]
+    assert "error" not in rec, rec
+    print(f"gpu speed on {dev['name']}: {rec['stepsPerSecond']:.1f} steps/s")
+    assert rec["stepsPerSecond"] > 0 and rec["steps"] == 40 and rec["splats"] == 5000
+    plan = slots.plan(None, [], [dev], "vulkan", gpuspeed.load())
+    assert plan[0].speed == rec["stepsPerSecond"] and plan[0].relative == 1.0 and not plan[0].slow
+    bad = gpuspeed.measure_all([{**dev, "index": 7, "name": "missing"}], tmp_path / "scene")
+    assert list(bad.values())[0]["error"]

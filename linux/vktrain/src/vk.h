@@ -37,6 +37,15 @@ struct DeviceInfo {
     VkDeviceSize maxStorageBufferRange = 0;
 };
 
+// One Vulkan device as --list-devices reports it (no logical device is created).
+struct DeviceSummary {
+    int index = 0;                    // --device N
+    std::string name, driver, deviceType;
+    uint32_t vendorID = 0, deviceID = 0;
+    uint64_t deviceLocalBytes = 0;
+    std::string pci;                  // "0000:01:00.0" (VK_EXT_pci_bus_info), empty when the driver can't say
+};
+
 struct ContextOptions {
     int deviceIndex = -1;             // -1: first discrete GPU, else integrated, virtual, then CPU devices
     enum class Atomics { Auto, Native, Cas } atomics = Atomics::Auto;
@@ -52,7 +61,7 @@ public:
     DeviceInfo info;
     bool nativeAtomics = false;   // which SPIR-V variant the float-atomic kernels use
 
-    static std::vector<std::string> listDevices();
+    static std::vector<DeviceSummary> listDevices();
 
     Buffer createBuffer(VkDeviceSize bytes);
     void destroy(Buffer& b);

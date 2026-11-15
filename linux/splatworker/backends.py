@@ -51,6 +51,7 @@ class JobContext:
     pause_event: threading.Event = field(default_factory=threading.Event)
     checkpoint_event: threading.Event = field(default_factory=threading.Event)
     checkpoint: Callable[[int], None] = lambda step: None
+    vulkan_index: Optional[int] = None   # the slot's Vulkan device (splatwork-vk-train --device); None: its own pick
 
 
 class Backend:
@@ -124,7 +125,7 @@ class SubprocessBackend(Backend):
         if ctx.kind == "train" and self.trainer_choice()["trainer"] == "vulkan":
             from .vktrain import subprocess_entry
 
-            args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), ctx.device_index, q, cancel, pause, ckpt)
+            args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), ctx.vulkan_index, q, cancel, pause, ckpt)
         elif ctx.kind == "train":
             from .trainer import subprocess_entry
 

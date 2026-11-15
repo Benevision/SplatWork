@@ -181,9 +181,9 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 
 | Method & path | Body | Response |
 |---|---|---|
-| `GET /v1/info` | – | `{"name","version":1,"gpus":[{"name","memoryMB","freeMemoryMB"}],"backend":"gsplat 1.x","busy":bool,"queueLength":int}` |
+| `GET /v1/info` | – | `{"name","version":1,"gpus":[{"name","memoryMB","freeMemoryMB"}],"backend":"gsplat 1.x","busy":bool,"queueLength":int}`; worker ≥ 1.7.3 adds `"slots":[{"id","name","kinds","cuda","vulkan","integrated","slow","memoryMB","busy","stepsPerSecond","relativeSpeed"}]` — one job per slot at a time; speeds are measured Vulkan training steps/s (null until measured, `splatworker measure-gpus`). `"gpus"` lists the fast slots only: a `slow` slot (measured under 25 % of the fastest; unmeasured, an integrated GPU beside another) takes a train job that names it, or a standalone one (no `region` / `cameraIds`, not a pipeline step) while every fast slot is busy |
 | `POST /v1/datasets` | raw zip of the `dataset/` directory (`Content-Type: application/zip`) | `{"datasetId": "abc"}` |
-| `POST /v1/jobs` | `{"datasetId":"abc","name":"Kitchen","config":{TrainingConfig}}` | `{"jobId":"j1"}` |
+| `POST /v1/jobs` | `{"datasetId":"abc","name":"Kitchen","config":{TrainingConfig}}` (+ optional `"slot"`: an id from `/v1/info` `"slots"` — the job runs on that GPU only; worker ≥ 1.7.3) | `{"jobId":"j1"}` |
 | `GET /v1/jobs` | – | `[JobStatus]` |
 | `GET /v1/jobs/{id}` | – | `JobStatus` |
 | `POST /v1/jobs/{id}/cancel` | – | `JobStatus` |

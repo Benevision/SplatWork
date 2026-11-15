@@ -1,5 +1,6 @@
 // splatwork-vk-train: the SplatWork Vulkan trainer program.
-//   splatwork-vk-train --info                       device summary as one JSON line
+//   splatwork-vk-train --info [--device N]          device summary as one JSON line
+//   splatwork-vk-train --list-devices               every Vulkan device as one JSON line (the worker's job slots)
 //   splatwork-vk-train --dump SCENE.bin OUT.bin     render one scene and back-propagate a given image gradient
 //   splatwork-vk-train train --dataset DIR --out result.ply [--config cfg.json] [--set key=value ...]
 //                      [--iterations N] [--job-dir DIR] [--resume FILE] [--preview-every N] [--opacity-reset]
@@ -245,6 +246,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { if (i + 1 >= argc) { std::fprintf(stderr, "missing value for %s\n", a.c_str()); std::exit(2); } return argv[++i]; };
         if (a == "--info") mode = "info";
+        else if (a == "--list-devices") mode = "list";
         else if (a == "--dump") { mode = "dump"; scene = next(); out = next(); }
         else if (a == "--device") co.deviceIndex = std::stoi(next());
         else if (a == "--atomics") {
@@ -266,12 +268,23 @@ int main(int argc, char** argv) {
             std::printf("%s\n", j.dump().c_str());
             return 0;
         }
+        if (mode == "list") {   // every Vulkan device, for the worker's job slots (one JSON line)
+            nlohmann::json arr = nlohmann::json::array();
+            for (const DeviceSummary& d : Context::listDevices())
+                arr.push_back({{"index", d.index}, {"name", d.name}, {"driver", d.driver}, {"deviceType", d.deviceType},
+                               {"vendorID", d.vendorID}, {"deviceID", d.deviceID}, {"memoryMB", d.deviceLocalBytes >> 20},
+                               {"pci", d.pci.empty() ? nlohmann::json(nullptr) : nlohmann::json(d.pci)}});
+            nlohmann::json j = {{"devices", arr}, {"interface", VKTRAIN_INTERFACE}};
+            std::printf("%s\n", j.dump().c_str());
+            return 0;
+        }
         if (mode == "dump") return dump(scene, out, co);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "splatwork-vk-train: %s\n", e.what());
         return 1;
     }
-    std::printf("usage: splatwork-vk-train --info\n"
+    std::printf("usage: splatwork-vk-train --info [--device N]\n"
+                "       splatwork-vk-train --list-devices          every Vulkan device as one JSON line\n"
                 "       splatwork-vk-train --dump SCENE.bin OUT.bin\n"
                 "       splatwork-vk-train train --dataset DIR --out result.ply [--config cfg.json] [--set key=value ...]\n"
                 "                          [--iterations N] [--job-dir DIR] [--resume FILE] [--preview-every N] [--opacity-reset]\n"

@@ -6,6 +6,15 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.3 — every GPU trains with the Vulkan trainer:** with the Vulkan trainer chosen, each
+  Vulkan GPU is its own job slot, so a PC with two cards trains two jobs at once. *Settings → GPUs* now lists GPUs
+  only the Vulkan trainer can use (AMD, Intel, integrated). An integrated GPU next to a faster card starts unticked
+  and, when ticked, only takes a training job of its own while the faster GPUs are busy, never a block of a block
+  run, so existing runs are as fast as before. Speeds are measured rather than guessed: *Settings → GPUs → Measure
+  GPU speed* (or `splatworker measure-gpus`) trains a small scene on each GPU, and a GPU under a quarter of the
+  fastest counts as slow; an unmeasured integrated GPU counts as slow. `/v1/info` lists the slots with their
+  measured speeds (`"slots"`); `splatworker benchmark --slot` tests one GPU. Processing and Auto clean stay on CUDA
+  GPUs.
 - **Smaller, resumable uploads to workers.** Photos sent to a Linux worker are re-saved for the upload only; the
   project keeps the originals. *Settings → Uploads to workers → Upload size* offers three options:
   - **Standard** (default): about ¾ the bytes, 38 dB from the original;
