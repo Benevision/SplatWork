@@ -79,6 +79,7 @@ struct TrainConfig {
     bool bilateralGrid = false;
     double bilateralGridLR = 2e-3;
     double bilateralGridTV = 10.0;
+    int64_t colourGuardStart = 4000;   // trainer.py ColourGuard
     bool progressiveResolution = false;
     bool decoupledSSIM = false;
     int64_t backgroundShell = 0;

@@ -81,6 +81,14 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.1" date="2026-11-15">
+      <description>
+        <p>Training no longer lets per-photo colour correction take over a scene's colour.</p>
+        <ul>
+          <li>With per-photo local colour correction on, training checks that the scene still has its own colours. If the scene gets worse or darker without the correction, the correction is reset; if that happens again, it is turned off for the rest of the run, and the job log says to check the camera solve.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.0" date="2026-11-15">
       <description>
         <p>Experimental training on AMD and Intel graphics cards.</p>

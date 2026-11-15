@@ -147,6 +147,7 @@ std::map<std::string, Field> fieldMap(TrainConfig& c) {
         {"bilateralGrid", {Field::Bool, &c.bilateralGrid}},
         {"bilateralGridLR", {Field::Float, &c.bilateralGridLR}},
         {"bilateralGridTV", {Field::Float, &c.bilateralGridTV}},
+        {"colourGuardStart", {Field::Int, &c.colourGuardStart}},
         {"progressiveResolution", {Field::Bool, &c.progressiveResolution}},
         {"decoupledSSIM", {Field::Bool, &c.decoupledSSIM}},
         {"backgroundShell", {Field::Int, &c.backgroundShell}},
@@ -247,6 +248,7 @@ void TrainConfig::validate() const {
     need(randomInitCount >= 1, "randomInitCount must be >= 1");
     need(previewInterval >= 0, "previewInterval must be >= 0 (0 disables previews)");
     need(evalInterval >= 0, "evalInterval must be >= 0 (0 disables eval)");
+    need(colourGuardStart >= 0, "colourGuardStart must be >= 0");
     const std::pair<const char*, double> pos[] = {{"lrPosition", lrPosition}, {"lrPositionFinal", lrPositionFinal},
         {"lrColor", lrColor}, {"lrSHRest", lrSHRest}, {"lrOpacity", lrOpacity}, {"lrScale", lrScale},
         {"lrRotation", lrRotation}, {"bilateralGridLR", bilateralGridLR}};

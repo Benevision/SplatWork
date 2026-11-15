@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -72,7 +73,7 @@ double progressiveScale(int64_t step, int64_t densifyStop) {
 
 // ------------------------------------------------------------------ resume file
 
-constexpr uint32_t RESUME_VERSION = 2;
+constexpr uint32_t RESUME_VERSION = 3;   // 3: ColourGuard state
 
 // The stage-2b models and optimiser states (trainer.py save_state's appearance / bilagrid / pose / skybox /
 // transient entries).
@@ -99,6 +100,9 @@ struct Saved {
     double psnrEma = NAN, lossEma = NAN, evalPsnr = NAN, elapsed = 0;
     int64_t previewStep = -1;
     bool capLogged = false;
+    int32_t guardResets = 0, guardStrikes = 0;
+    double guardBest = NAN;
+    bool guardOff = false;   // ColourGuard turned the bilateral grid off (it stays off on resume)
     Extras x;
 };
 
@@ -223,6 +227,7 @@ void saveState(const std::string& path, const Saved& s) {
         o.str(s.rng); o.str(s.strategy);
         o.put(s.psnrEma); o.put(s.lossEma); o.put(s.evalPsnr); o.put(s.elapsed);
         o.put(s.previewStep); o.put(uint8_t(s.capLogged));
+        o.put(s.guardResets); o.put(s.guardStrikes); o.put(s.guardBest); o.put(uint8_t(s.guardOff));
         writeExtras(o, s.x);
         if (!o.f) throw Error("writing " + tmp + " failed");
     }
@@ -247,6 +252,8 @@ Saved loadState(const std::string& path, std::string& extrasBlob) {
     s.rng = in.str(); s.strategy = in.str();
     s.psnrEma = in.get<double>(); s.lossEma = in.get<double>(); s.evalPsnr = in.get<double>(); s.elapsed = in.get<double>();
     s.previewStep = in.get<int64_t>(); s.capLogged = in.get<uint8_t>() != 0;
+    s.guardResets = in.get<int32_t>(); s.guardStrikes = in.get<int32_t>(); s.guardBest = in.get<double>();
+    s.guardOff = in.get<uint8_t>() != 0;
     extrasBlob.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     return s;
 }
@@ -461,7 +468,7 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             X.poseOn = true;
             X.pose.setup(nTrain, cfg.poseRefinementLR, cfg.poseRefinementReg);
         }
-        const bool decoupled = cfg.decoupledSSIM && (X.appOn || X.gridOn);
+        bool decoupled = cfg.decoupledSSIM && (X.appOn || X.gridOn);
 
         // ---------------------------------------------------------- state
         Saved resume;
@@ -472,6 +479,10 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             if (resume.trainViews != nTrain || resume.evalViews != nEval)
                 throw Error("the dataset changed since this job was paused (different photos); it can't be resumed");
             if (resume.strategy != cfg.strategy) throw Error("the saved state is from another strategy; it can't be resumed");
+            if (resume.guardOff) {   // ColourGuard turned the correction off before the pause: it stays off
+                X.gridOn = false;
+                decoupled = cfg.decoupledSSIM && X.appOn;
+            }
             std::istringstream xs(blob);
             In xin{xs};
             readExtras(xin, X);
@@ -706,6 +717,58 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             return sum / double(nEval);
         };
 
+        // trainer.py ColourGuard / guard_score: 8 evenly spaced training photos rendered without their colour
+        // correction (camera pose refinement applied): their mean PSNR and Σ clamped render RGB / Σ photo RGB, over
+        // the masked-in pixels.
+        auto guardScore = [&](int shDeg, int64_t step) -> std::pair<double, double> {
+            std::vector<size_t> pick;
+            if (nTrain <= 8) for (size_t i = 0; i < nTrain; i++) pick.push_back(i);
+            else
+                for (int i = 0; i < 8; i++) {
+                    size_t k = size_t(std::lround(double(i) * double(nTrain - 1) / 7.0));
+                    if (pick.empty() || pick.back() != k) pick.push_back(k);
+                }
+            double num = 0, den = 0, psnrSum = 0;
+            int scored = 0;
+            for (size_t i : pick) {
+                const View& v = views[i];
+                RenderOpts ro = base;
+                ro.shDegree = shDeg;
+                ro.hasDepth = false;
+                std::copy(evalBg, evalBg + 3, ro.bg);
+                gs.feat = LossFeatures();
+                Camera cam = v.camera();
+                if (X.poseOn && step >= cfg.poseRefinementStart) refinedW2c(v.w2c, X.pose.row(i), cam.w2c);
+                if (X.skyOn) {
+                    setSky(cam.w2c);
+                    ro.bg[0] = ro.bg[1] = ro.bg[2] = 0;
+                }
+                gs.setCamera(cam, ro);
+                gs.forwardComposite();
+                std::vector<float> im = gs.image();
+                size_t hw = size_t(v.width) * v.height;
+                double se = 0, cnt = 0;
+                for (size_t q = 0; q < hw; q++) {
+                    float c[3], a, m;
+                    v.pixel(q, c, a, m);
+                    for (int ch = 0; ch < 3; ch++) {
+                        double pred = std::clamp(double(im[size_t(ch) * hw + q]), 0.0, 1.0);
+                        double gt = c[ch] * a + (1 - a) * evalBg[ch];
+                        num += m * pred;
+                        den += m * gt;
+                        se += m * (pred - gt) * (pred - gt);
+                        cnt += m;
+                    }
+                }
+                if (cnt > 0) {
+                    psnrSum += -10 * std::log10(std::max(se / cnt, 1e-10));
+                    scored++;
+                }
+            }
+            gs.feat = LossFeatures();
+            return {scored ? psnrSum / scored : NAN, den > 1e-6 ? num / den : NAN};
+        };
+
         auto writeCheckpoint = [&](int64_t step) {
             if (opt.jobDir.empty()) return;
             Params p;
@@ -720,7 +783,20 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
         double psnrEma = NAN, lossEma = NAN, lastEval = NAN;
         int64_t previewStep = -1;
         bool capLogged = false;
+        int32_t guardResets = 0, guardStrikes = 0;
+        double guardBest = NAN;
+        bool guardOff = false;
+        std::string trainMsg = "training";
+        auto guardMessage = [&]() {
+            trainMsg = guardOff ? "training (colour correction off — check the camera solve)"
+                                : "training (colour correction was reset)";
+        };
         if (resuming) {
+            guardResets = resume.guardResets;
+            guardOff = resume.guardOff;
+            guardStrikes = resume.guardStrikes;
+            guardBest = resume.guardBest;
+            if (guardResets) guardMessage();
             startStep = resume.step;
             order = resume.order;
             psnrEma = resume.psnrEma; lossEma = resume.lossEma; lastEval = resume.evalPsnr;
@@ -756,6 +832,10 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             s.elapsed = elapsedBefore + seconds(tStart, Clock::now());
             s.previewStep = previewStep;
             s.capLogged = capLogged;
+            s.guardResets = guardResets;
+            s.guardOff = guardOff;
+            s.guardStrikes = guardStrikes;
+            s.guardBest = guardBest;
             syncSky();
             if (transientOn) {
                 GpuSplat::TransientState t = gs.transientState();
@@ -792,6 +872,12 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             if (ctl.cancel) throw Cancelled{};
             if (step == opt.pauseAt && step != startStep) ctl.pause = true;
             if (ctl.checkpoint.exchange(false)) writeCheckpoint(step);
+            if (step == opt.scrambleAt && nTrain > 1) {   // tests: cameras that no longer fit the photos
+                double first[4][4];
+                std::memcpy(first, views[0].w2c, sizeof first);
+                for (size_t i = 0; i + 1 < nTrain; i++) std::memcpy(views[i].w2c, views[i + 1].w2c, sizeof first);
+                std::memcpy(views[nTrain - 1].w2c, first, sizeof first);
+            }
             if (step == opt.snapshotAt) {   // tests: the state a pause would save, without stopping
                 saveTo((fs::path(opt.jobDir.empty() ? "." : opt.jobDir) / "snapshot.vkstate").string(), step);
                 em.emit({{"type", "snapshot"}, {"step", step}});
@@ -1035,6 +1121,54 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                     em.log(fmt("step %lld: holdout depth error %.4f (mean |rendered depth − depth map|)", (long long)cur,
                                evalDepthErr / evalDepthCnt));
             }
+            // trainer.py ColourGuard: the bilateral grids must not end up supplying the scene's colour
+            if (X.gridOn && cfg.evalInterval && cur % cfg.evalInterval == 0 && cur < cfg.iterations &&
+                cur >= cfg.colourGuardStart) {
+                if (std::find(opt.darkenAt.begin(), opt.darkenAt.end(), cur) != opt.darkenAt.end()) {
+                    // tests: the collapse a wrong camera solve led to — black base colours (f_dc ≈ −1.77)
+                    SplatState s;
+                    download(s);
+                    for (int i = 0; i < s.p.n; i++)
+                        for (int k = 0; k < 48; k++) s.p.sh[size_t(i) * 48 + size_t(k)] = k < 3 ? float(-0.5 / 0.28209479177387814) : 0.0f;
+                    upload(s);
+                }
+                auto [rawPsnr, bright] = guardScore(shDeg, cur);
+                if (std::getenv("SPLAT_CC_LOG") && !std::isnan(rawPsnr))
+                    em.log(fmt("step %lld: uncorrected PSNR %.2f dB, brightness %.3f of the photos'", (long long)cur, rawPsnr,
+                               std::isnan(bright) ? 0.0 : bright));
+                double drop = NAN;
+                if (!std::isnan(rawPsnr)) {   // a strike: more than 3 dB below the best uncorrected score so far
+                    if (!std::isnan(guardBest) && rawPsnr < guardBest - 3.0) {
+                        guardStrikes++;
+                        drop = guardBest - rawPsnr;
+                    } else {
+                        guardStrikes = 0;
+                    }
+                    guardBest = std::isnan(guardBest) ? rawPsnr : std::max(guardBest, rawPsnr);
+                }
+                const bool dark = !std::isnan(bright) && bright < 0.6;
+                if (dark || guardStrikes >= 2) {
+                    std::string why = dark ? fmt("without it the scene renders at %.0f%% of the photos' brightness", 100 * bright)
+                                           : fmt("without it the photos score %.1f dB below their best", drop);
+                    guardStrikes = 0;
+                    guardBest = NAN;
+                    if (guardResets == 0) {
+                        guardResets = 1;
+                        X.grid.reset();
+                        em.log(fmt("Per-photo colour correction reset at step %lld: it was taking over the scene's colour (%s)",
+                                   (long long)cur, why.c_str()));
+                    } else {
+                        guardOff = true;
+                        X.gridOn = false;
+                        decoupled = cfg.decoupledSSIM && X.appOn;
+                        em.log(fmt("Per-photo colour correction turned off at step %lld: it took over the scene's colour again "
+                                   "(%s). This usually means the cameras don't fit the photos — check the camera solve.",
+                                   (long long)cur, why.c_str()));
+                    }
+                    guardMessage();
+                    em.status({{"message", trainMsg}});
+                }
+            }
             if (previewInterval > 0 && !opt.jobDir.empty() && cur % previewInterval == 0 && cur < cfg.iterations) {
                 Params p;
                 gs.getParams(p);
@@ -1049,7 +1183,7 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                 double rate = seconds(trainStart, now) / double(std::max<int64_t>(1, cur - startStep));
                 em.status({{"step", cur}, {"totalSteps", cfg.iterations}, {"loss", numOrNull(lossEma)}, {"psnr", numOrNull(psnrEma)},
                            {"evalPsnr", numOrNull(lastEval)}, {"numGaussians", gs.n}, {"elapsedSeconds", elapsed},
-                           {"etaSeconds", rate * double(cfg.iterations - cur)}, {"message", "training"}});
+                           {"etaSeconds", rate * double(cfg.iterations - cur)}, {"message", trainMsg}});
                 if (cur % 100 == 0 || cur == cfg.iterations)
                     em.log(fmt("step %lld/%lld loss %.4f psnr %.2f gaussians %d sh %d", (long long)cur, (long long)cfg.iterations,
                                std::isnan(lossEma) ? 0.0 : lossEma, std::isnan(psnrEma) ? 0.0 : psnrEma, gs.n, shDeg));

@@ -318,6 +318,67 @@ def test_colour_correction(build_dir, feature_dataset, tmp_path):
     assert res["grid"] > res["off"] + 0.5
 
 
+GUARD = {**FEAT, "bilateralGrid": True, "decoupledSSIM": True, "evalInterval": 100, "colourGuardStart": 100}
+
+
+def guard_lines(msgs):
+    return [m["message"] for m in of(msgs, "log") if "Per-photo colour correction" in m["message"]]
+
+
+def test_colour_guard_quiet_on_healthy_colour_shifts(build_dir, feature_dataset, tmp_path, monkeypatch):
+    """Photos with their own exposure / tint are what the bilateral grid is for: the uncorrected renders keep
+    improving and stay near the photos' brightness, and the guard never acts."""
+    monkeypatch.setenv("SPLAT_CC_LOG", "1")
+    ds = feature_dataset("shift", "--color-shift")
+    rc, msgs = run(build_dir, ds, tmp_path, GUARD, name="healthy")
+    assert rc == 0, of(msgs, "error")
+    scores = [(float(m["message"].split("PSNR ")[1].split()[0]), float(m["message"].split("brightness ")[1].split()[0]))
+              for m in of(msgs, "log") if "uncorrected PSNR" in m["message"]]
+    print(f"colour guard, healthy: (PSNR, brightness) {scores}, holdout {done_of(msgs)['evalPsnr']:.2f} dB")
+    assert len(scores) == 5 and min(b for _, b in scores) > 0.8
+    assert all(b[0] > a[0] - 1.0 for a, b in zip(scores, scores[1:]))
+    assert guard_lines(msgs) == []
+    assert done_of(msgs)["evalPsnr"] > 20.5
+
+
+def test_colour_guard_resets_then_turns_off(build_dir, feature_dataset, tmp_path):
+    """The splats' colours blackened at step 300 (as a wrong camera solve left them, the grids painting the
+    photos): the grids are reset, and when the renders are still dark at the next eval the correction is turned
+    off — and a run resumed after that keeps it off."""
+    ds = feature_dataset("shift", "--color-shift")
+    cfg = {**GUARD, "iterations": 700}
+    rc, msgs = run(build_dir, ds, tmp_path, cfg, "--darken-at", "300", "--snapshot-at", "550", name="dark")
+    assert rc == 0, of(msgs, "error")
+    lines = guard_lines(msgs)
+    assert len(lines) == 2, lines
+    assert lines[0].startswith("Per-photo colour correction reset at step 300: it was taking over the scene's colour "
+                               "(without it the scene renders at 0% of the photos' brightness)")
+    assert lines[1].startswith("Per-photo colour correction turned off at step 400")
+    assert "check the camera solve" in lines[1]
+    status = [m.get("message") for m in of(msgs, "status")]
+    assert "training (colour correction off — check the camera solve)" in status
+
+    snap = tmp_path / "dark-snapshot.vkstate"
+    shutil.copy(tmp_path / "dark-job" / "snapshot.vkstate", snap)
+    rc, cont = run(build_dir, ds, tmp_path, cfg, "--resume", str(snap), name="dark-cont")
+    assert rc == 0, of(cont, "error")
+    assert guard_lines(cont) == []
+    assert of(cont, "status")[-1]["message"] == "training (colour correction off — check the camera solve)"
+
+
+def test_colour_guard_acts_on_falling_psnr(build_dir, feature_dataset, tmp_path):
+    """From step 450 every training photo gets its neighbour's camera (cameras that don't fit the photos): the
+    renders without the correction score far below their best at two evals in a row, so the grids are reset."""
+    ds = feature_dataset("shift", "--color-shift")
+    rc, msgs = run(build_dir, ds, tmp_path, {**GUARD, "iterations": 700}, "--scramble-at", "450", name="scrambled")
+    assert rc == 0, of(msgs, "error")
+    lines = guard_lines(msgs)
+    assert len(lines) == 1, lines
+    assert lines[0].startswith("Per-photo colour correction reset at step 600: it was taking over the scene's colour "
+                               "(without it the photos score ")
+    assert lines[0].endswith(" dB below their best)")
+
+
 def test_depth_supervision(build_dir, feature_dataset, tmp_path):
     """Sensor depth maps (float16, half resolution): the depth loss (and the depth-normal loss) pull the rendered
     depth onto the maps — the holdout depth error drops well below an RGB-only run's."""

@@ -143,6 +143,11 @@ void BilateralGridModel::pinMean() {
         for (size_t k = 0; k < g.size(); k++) g[k] = float(g[k] - dev[k]);
 }
 
+void BilateralGridModel::reset() {
+    grids.assign(grids.size(), identity());
+    opt.assign(grids.size(), HostAdam());
+}
+
 // ---------------------------------------------------------------- pose refinement
 
 void rot6d(const double a[6], double R[3][3]) {

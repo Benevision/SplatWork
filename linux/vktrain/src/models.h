@@ -50,6 +50,7 @@ struct BilateralGridModel {
     double tvLoss(size_t i) const;
     void step(size_t i, const std::vector<float>& gpuGrad);
     void pinMean();
+    void reset();   // every grid back to identity, fresh Adam state (trainer.py BilateralGrid.reset)
 };
 
 // ---------------------------------------------------------------- camera pose refinement

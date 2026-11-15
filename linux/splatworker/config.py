@@ -107,6 +107,8 @@ class TrainingConfig:
     bilateralGrid: bool = False
     bilateralGridLR: float = 2e-3
     bilateralGridTV: float = 10.0
+    # ColourGuard (trainer.py): from this step on, each eval checks the grids aren't supplying the scene's colour
+    colourGuardStart: int = 4000
     # Coarse-to-fine: ¼ → ½ → ¾ → full image resolution over the first half of the densification window.
     progressiveResolution: bool = False
     # SSIM contrast/structure on the uncorrected render (luminance on the corrected one) when per-photo colour
@@ -185,6 +187,7 @@ class TrainingConfig:
         need(self.randomInitCount >= 1, "randomInitCount must be >= 1")
         need(self.previewInterval >= 0, "previewInterval must be >= 0 (0 disables previews)")
         need(self.evalInterval >= 0, "evalInterval must be >= 0 (0 disables eval)")
+        need(self.colourGuardStart >= 0, "colourGuardStart must be >= 0")
         for name in ("lrPosition", "lrPositionFinal", "lrColor", "lrSHRest", "lrOpacity",
                      "lrScale", "lrRotation", "bilateralGridLR"):
             need(getattr(self, name) > 0, f"{name} must be > 0")

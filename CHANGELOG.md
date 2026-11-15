@@ -6,6 +6,13 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.1 — colour-correction safeguard:** per-photo local colour correction (bilateral grid)
+  can no longer take over a scene's colour, as it did on a drone survey trained on a wrong camera solve (the result
+  came out nearly black, its colours held by the correction, while held-out PSNR fell from 14.9 to 9.3 dB). From
+  step 4000, at each eval, both Linux trainers (gsplat and Vulkan) score 8 training photos rendered without the
+  correction. Two evals in a row more than 3 dB below their best, or renders under 0.6 of the photos' brightness,
+  reset every grid; the second time, the correction is turned off for the rest of the run, which a resumed job
+  remembers. The job log and status say so and point at the camera solve. Same check as the Mac trainer's.
 - **SplatWork for Linux 1.7.0 — training on AMD and Intel graphics cards (experimental):** a new Vulkan trainer is
   built into the app. It needs no PyTorch or CUDA download and runs on any GPU with a Vulkan driver.
   - On AMD and Intel cards it trains by default; NVIDIA cards keep the gsplat (CUDA) trainer, and the Vulkan one can
