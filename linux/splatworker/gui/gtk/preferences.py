@@ -185,6 +185,8 @@ class Preferences:
             info, rows = result
             for r in rows:
                 row = action_row(r["title"], r["subtitle"])
+                if r.get("slower"):
+                    self._slower_choice(row, r)
                 check = Gtk.CheckButton(active=r["active"], valign=Gtk.Align.CENTER)
                 check.connect("toggled", lambda *_: self._gpus_changed())
                 row.add_prefix(check)
@@ -196,6 +198,10 @@ class Preferences:
                 g.add(row)
             from ...slots import _vulkan_usable
 
+            if any(r.get("slower") for r in rows):
+                self._switch(g, "migrate_jobs", "Move jobs to a faster GPU when one is free",
+                             "A job a slower GPU started pauses and continues on the faster GPU (Vulkan trainer). "
+                             "Turn off to test both GPUs side by side.")
             if any(_vulkan_usable(d) for d in self._gpu_probe[1]):
                 self._measure_row = action_row("Measure GPU speed",
                                                "Trains the benchmark scene at full load for about a minute on each "
@@ -214,6 +220,24 @@ class Preferences:
                                  else "dialog-warning-symbolic"))
         run_in_thread(probe, done)
         return g
+
+    SLOWER_CHOICES = (("auto", "Only when faster GPUs are busy"), ("always", "Always use, like any other GPU"))
+
+    def _slower_choice(self, row, r) -> None:
+        """A slower GPU's choice (slots.py user_choice), with its measured share of the fastest."""
+        keys = [k for k, _ in self.SLOWER_CHOICES]
+        drop = Gtk.DropDown.new_from_strings([label for _, label in self.SLOWER_CHOICES])
+        drop.set_valign(Gtk.Align.CENTER)
+        drop.set_selected(keys.index((self.s.gpu_modes or {}).get(str(r["key"]), "auto")))
+        if r.get("share"):
+            drop.set_tooltip_text(r["share"])
+
+        def changed(d, _p):
+            modes = dict(self.s.gpu_modes or {})
+            modes[str(r["key"])] = keys[d.get_selected()]
+            self._set("gpu_modes", {k: v for k, v in modes.items() if v != "auto"})
+        drop.connect("notify::selected", changed)
+        row.add_suffix(drop)
 
     def _measure_gpus(self, btn: Gtk.Button) -> None:
         from ... import gpuspeed

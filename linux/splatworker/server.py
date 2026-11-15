@@ -57,7 +57,7 @@ FINAL_STATES = ("completed", "failed", "cancelled")
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
                "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin", "checkpointStep",
-               "pausedAt", "stage", "stageProgress", "stages", "trainJobId", "parentJobId", "resource")
+               "pausedAt", "stage", "stageProgress", "stages", "trainJobId", "parentJobId", "resource", "slot")
 REMOTE_PAUSE_LIMIT = 3600.0         # another computer's paused job resumes by itself after this (s)
 LOCAL_PAUSE_LIMIT = 14 * 86400.0    # a paused job of this PC's app is cancelled (resume.pt freed) after this
 RESUME_FILES = ("resume.pt", "resume.vkstate")   # paused train job's saved state: CUDA trainer, Vulkan trainer
@@ -136,6 +136,7 @@ class Job:
         self.checkpoints = 0            # checkpoints written since the server started (POST …/checkpoint?wait=)
         self.deleted = False
         self.started_monotonic: Optional[float] = None
+        self.migrate_to = None          # moving to a faster slot (JobManager, 1.7.8): its key while it pauses
         self.lock = threading.Lock()
         self._last_persist = 0.0
 
@@ -160,7 +161,7 @@ class Job:
                 if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
                          "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority",
                          "checkpointStep", "pausedAt", "stage", "stageProgress", "stages", "trainJobId",
-                         "resource"):
+                         "resource", "slot"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None
                     self.status[k] = v
@@ -212,6 +213,9 @@ class JobManager:
         self.cpu_running: Dict[str, Any] = {}  # processing job id → its home slot
         self.leases: Dict[Any, str] = {}       # slot key → processing job id holding that GPU
         self.pending: List[Any] = []           # gpulease.Pending, oldest first
+        # moving a job from a slower slot to a faster one (1.7.8): fast slot key → the job id it waits for
+        self.reserved: Dict[Any, str] = {}
+        self._dataset_sizes: Dict[str, Any] = {}
         self.stopping = False
         self.threads: List[threading.Thread] = []
 
@@ -253,6 +257,9 @@ class JobManager:
             if job.spec.get("slot") and job.spec["slot"] not in ids:
                 # its GPU was unticked (or removed) since: any GPU may run it now
                 job.log(f"GPU slot {job.spec.pop('slot')} no longer exists; the job runs on any GPU")
+                job.persist()
+            if job.spec.pop("pin", None) is not None:      # was moving to a faster GPU when the worker stopped
+                job.spec.pop("movedFrom", None)
                 job.persist()
             if job.spec.get("kind") == "pipeline":
                 continue
@@ -492,6 +499,10 @@ class JobManager:
                 raise ApiError(409, "only training jobs can be paused while they run")
             if job.cancel_event.is_set():
                 raise ApiError(409, "the job is being cancelled")
+            if getattr(job, "migrate_to", None) is not None:      # a pause asked for while it moves: just pause
+                with self.cond:
+                    job.migrate_to = None
+                    self._unreserve_locked(job.id)
             job.pause_event.set()
             job.update(message="pausing")
             job.log("pause requested")
@@ -584,22 +595,112 @@ class JobManager:
     # --------------------------------------------------------------- worker
     def slot_takes(self, slot, job: Job) -> bool:
         """(Holding ``cond``.) Whether ``slot`` may start ``job`` now (slots.py: kinds, named slots, slow slots)."""
-        from .slots import standalone
-
         kind = job.spec.get("kind")
         if self.lease_mode and kind == "process":
             return False                 # the CPU pool runs it (gpulease.py)
+        pin = job.spec.get("pin")            # moving to a faster slot (migration)
+        if pin:
+            return pin == slot.id
+        reserved = self.reserved.get(slot.key)
+        if reserved and reserved != job.id:
+            return False                     # held for a job moving here
         named = job.spec.get("slot")
         if named:
             return named == slot.id
         if not slot.takes_kind(kind):
             return False
+        if kind == "train" and not self._fits(slot, job):
+            return False
         if slot.slow:
-            if kind != "train" or not standalone(job.spec):
+            # a slower GPU starts a waiting train job (block jobs too) only while every faster GPU is busy; the
+            # job moves to a faster one when it frees up (_migrate_to)
+            if kind != "train":
                 return False
             fast = [s for s in self.slots if not s.slow and s.takes_kind("train")]
-            return all(s.key in self.running for s in fast)
+            return all(s.key in self.running or s.key in self.reserved or s.key in self.leases for s in fast)
         return True
+
+    def _dataset_size(self, dataset_id: str):
+        """(photos, width, height) of a dataset, for memory estimates; cached."""
+        if dataset_id not in self._dataset_sizes:
+            size = (0, 0, 0)
+            root = dataset_root(self.settings, dataset_id)
+            try:
+                doc = json.loads((root / "dataset.json").read_text(encoding="utf-8")) if root else {}
+                cams = doc.get("cameras") or []
+                w = max((int(c.get("width") or 0) for c in cams), default=0)
+                h = max((int(c.get("height") or 0) for c in cams), default=0)
+                size = (len(cams), w, h)
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+            self._dataset_sizes[dataset_id] = size
+        return self._dataset_sizes[dataset_id]
+
+    def _fits(self, slot, job: Job) -> bool:
+        """Whether a train job's estimated memory fits the slot (slots.estimate_mb / budget_mb); unknown: yes."""
+        from .slots import budget_mb, estimate_mb
+
+        if slot.memory_mb is None and not slot.integrated:
+            return True
+        budget = budget_mb(slot)
+        if not budget:
+            return True
+        photos, w, h = self._dataset_size(job.spec.get("datasetId", ""))
+        return estimate_mb(job.spec.get("config") or {}, photos, w, h) <= 0.8 * budget
+
+    # ------------------------------------------------------- moving jobs to a faster GPU (1.7.8)
+    HANDOVER_S = 60.0       # pausing, loading the photos again, resuming
+
+    def _can_migrate(self) -> bool:
+        if not self.settings.migrate or not getattr(self.backend, "pausable", False):
+            return False
+        try:
+            return self.backend.trainer_choice().get("trainer") == "vulkan"
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _migration_candidate(self, fast):
+        """(Holding ``cond``.) A train job on a slower slot worth moving to ``fast``: still well short of the end
+        (its time left there > handing over + its time left on ``fast``)."""
+        if fast.slower or fast.vulkan_only and fast.vulkan is None or not fast.takes_kind("train"):
+            return None
+        best = None
+        for slow in self.slots:
+            jid = self.running.get(slow.key)
+            if not slow.slower or slow is fast or jid is None or jid not in self.jobs:
+                continue
+            job = self.jobs[jid]
+            if (job.spec.get("kind") != "train" or job.state != "training" or job.pause_event.is_set()
+                    or job.cancel_event.is_set() or getattr(job, "migrate_to", None) is not None
+                    or job.spec.get("slot") or not self._fits(fast, job)):
+                continue
+            step, total = int(job.status.get("step") or 0), int(job.status.get("totalSteps") or 0)
+            eta = job.status.get("etaSeconds")
+            if total and eta is not None and step < total:
+                ratio = (fast.speed / slow.speed) if fast.speed and slow.speed else 4.0
+                if float(eta) <= self.HANDOVER_S + float(eta) / max(ratio, 1.0):
+                    continue                          # almost done where it is
+            if best is None or step < best[1]:
+                best = (job, step, slow)
+        return best
+
+    def _start_migration_locked(self, fast) -> bool:
+        cand = self._migration_candidate(fast)
+        if cand is None:
+            return False
+        job, step, slow = cand
+        job.migrate_to = fast.key
+        job.migrate_from = slow
+        self.reserved[fast.key] = job.id
+        job.pause_event.set()
+        job.update(message=f"moving to {fast.name or fast.id}")
+        job.log(f"moving from {slow.name or slow.id} to {fast.name or fast.id} (now free) at about step {step}: "
+                "saving its state")
+        return True
+
+    def _unreserve_locked(self, job_id: str) -> None:
+        for k in [k for k, j in self.reserved.items() if j == job_id]:
+            del self.reserved[k]
 
     def _slot(self, slot):
         """A Slot, or a slot key (a CUDA index / None, as callers passed before slots existed)."""
@@ -633,12 +734,17 @@ class JobManager:
                 # takes next.
                 live = [j for j in self.queue if j in self.jobs and self.jobs[j].state == "queued"]
                 self.queue = collections.deque(live)
+                if slot.key not in self.reserved and slot.key not in self.leases and self._can_migrate():
+                    self._start_migration_locked(slot)     # a job on a slower GPU moves here (it pauses first)
                 mine = [] if slot.key in self.leases else [j for j in live if self.slot_takes(slot, self.jobs[j])]
                 if mine:
                     best = max(mine, key=lambda j: (int(self.jobs[j].status.get("priority") or 0), -live.index(j)))
                     self.queue.remove(best)
                     self.running[slot.key] = best
                     job = self.jobs[best]
+                    if job.spec.pop("pin", None):
+                        self._unreserve_locked(job.id)
+                        job.persist()
                     # taken: no longer "queued" from here on, so a pause / resume / cancel arriving before the job
                     # really starts goes through the running path (events the job checks) instead of re-queueing it
                     job.update(persist=True, state="loading", message="starting")
@@ -813,6 +919,9 @@ class JobManager:
             finally:
                 with self.cond:
                     self.running.pop(slot.key, None)
+                    if getattr(job, "migrate_to", None) is None or job.state != "queued":
+                        self._unreserve_locked(job.id)    # finished / cancelled / paused instead of moving
+                        job.migrate_to = None
                     if self.pending:
                         self._grant_leases_locked()     # a waiting GPU stage may now have the GPU
                     self.cond.notify_all()     # a slow slot may now take a job a fast one left
@@ -831,11 +940,17 @@ class JobManager:
         resuming = job.spec.get("kind") == "train" and _has_resume(job.dir)
         prior = float(job.status.get("elapsedSeconds") or 0.0) if resuming else 0.0
         job.started_monotonic = time.monotonic() - prior     # elapsed time carries on across a pause
-        job.update(persist=True, state="loading", message="resuming" if resuming else "starting", gpu=gpu_name)
+        job.update(persist=True, state="loading", message="resuming" if resuming else "starting", gpu=gpu_name,
+                   slot=None if self.lease_mode and job.spec.get("kind") == "process" else slot.id)
         where = ("GPU " + str(device) if device is not None else
                  "Vulkan device " + str(slot.vulkan) if slot.vulkan is not None else "default device")
         if self.lease_mode and job.spec.get("kind") == "process":
             where = f"the CPU (GPU stages on {where})"
+        moved = job.spec.pop("movedFrom", None)
+        if moved:
+            job.persist()
+            job.log(f"moved from {moved} to {gpu_name or where} at step {job.status.get('step') or 0}")
+        job.migrate_to = None
         job.log(f"starting on {where}{' (' + gpu_name + ')' if gpu_name else ''}"
                 f"{' — a slower GPU, used while the faster ones are busy' if slot.slow else ''}")
 
@@ -886,6 +1001,22 @@ class JobManager:
             if job.cancel_event.is_set():        # cancelled while pausing: cancel wins
                 self._finish(job, "cancelled", "cancelled")
                 return
+            target = getattr(job, "migrate_to", None)
+            if target is not None and not self.stopping:
+                fast = next((x for x in self.slots if x.key == target), None)
+                with self.cond:
+                    if fast is not None and self.reserved.get(target) == job.id:
+                        # back in the queue, first, for the faster slot only (same jobId, same step)
+                        job.spec["pin"] = fast.id
+                        job.spec["movedFrom"] = slot.name or slot.id
+                        elapsed = round(time.monotonic() - job.started_monotonic, 1)
+                        job.update(persist=True, state="queued", step=e.step, elapsedSeconds=elapsed,
+                                   message=f"moving to {fast.name or fast.id} (continues from step {e.step:,})")
+                        job.log(f"state saved at step {e.step}; moving to {fast.name or fast.id}")
+                        self.queue.appendleft(job.id)
+                        self.cond.notify_all()
+                        return
+                job.migrate_to = None
             elapsed = round(time.monotonic() - job.started_monotonic, 1)
             job.update(persist=True, state="paused", step=e.step, message=f"paused at step {e.step:,}",
                        etaSeconds=None, elapsedSeconds=elapsed, pausedAt=time.time())
@@ -1117,7 +1248,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         vk_devices = vktrain.list_devices()["devices"] if trainer == "vulkan" else []
         from . import gpuspeed
 
-        devices = plan(settings.gpus, list_gpus(), vk_devices, trainer, gpuspeed.load())
+        devices = plan(settings.gpus, list_gpus(), vk_devices, trainer, gpuspeed.load(), settings.gpu_modes)
         for s in devices:
             log.info("job slot %s: %s%s", s.id, s.name or "default device",
                      " (slow: only standalone train jobs while the faster GPUs are busy)" if s.slow else "")

@@ -345,6 +345,11 @@ class ServerSettings:
     trainer: str = "auto"
     # processing jobs at once (gpulease.py: they hold a GPU only around GPU stages; COLMAP uses every core)
     cpu_jobs: int = 1
+    # slower GPUs (slots.py): per slot key ("vk:<pci>" or a CUDA index as text) "auto" — start waiting jobs while the
+    # faster GPUs are busy — or "always" (a slot like any other); and whether a job on a slower GPU moves to a
+    # faster one when it frees up (Vulkan trainer)
+    gpu_modes: Dict[str, str] = field(default_factory=dict)
+    migrate: bool = True
 
     @property
     def local_enabled(self) -> bool:

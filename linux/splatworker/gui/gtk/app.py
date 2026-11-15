@@ -18,7 +18,7 @@ from .preferences import Preferences
 from .setup_assistant import SetupAssistant
 from .window import MainWindow
 
-RESTART_SETTINGS = {"trainer", "cpu_jobs", "port", "name", "mdns", "require_token", "advertise_ip", "gpus", "max_upload_gb",
+RESTART_SETTINGS = {"trainer", "cpu_jobs", "gpu_modes", "migrate_jobs", "port", "name", "mdns", "require_token", "advertise_ip", "gpus", "max_upload_gb",
                     "max_extracted_gb", "data_dir", "log_level", "runtime"}
 
 

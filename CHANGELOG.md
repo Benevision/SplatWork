@@ -6,6 +6,15 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.8 — a slower GPU starts waiting jobs, which move to the faster GPU when it frees
+  up:** on a PC with a fast and a slow GPU (an RTX 4080 and the Ryzen's Radeon 610M), a training job waiting for
+  the busy fast GPU, block-run jobs included, now starts on the slower one if it fits its memory. When the fast GPU
+  frees up, the job pauses, its state is saved, and it continues there from the same step under the same job.
+  The log says "moved from Radeon 610M to RTX 4080 at step N". A job that is almost done stays where it is.
+  Moving needs the Vulkan trainer on both GPUs. *Settings → GPUs* gives each slower GPU a choice: *Only when
+  faster GPUs are busy* (default) or *Always use, like any other GPU*, with its measured share of the fastest GPU.
+  A switch, *Move jobs to a faster GPU when one is free*, can turn the moves off. `/v1/info` "slots" adds `slower`
+  and `userChoice`, and JobStatus adds `slot`.
 - **SplatWork for Linux 1.7.7 — Check for Updates…:** in the main menu and in *Settings → Startup and background*.
   It checks right away and says whether this version is up to date, that a newer one is available, or why it
   couldn't check. In the Flatpak, *Update and Restart* downloads and installs it straight away, even before the

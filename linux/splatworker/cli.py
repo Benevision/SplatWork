@@ -18,6 +18,13 @@ from .platform_compat import default_data_dir
 from . import PRODUCT_NAME, __version__
 
 
+def _parse_gpu_mode(value: str):
+    key, _, mode = value.rpartition("=")
+    if not key or mode not in ("auto", "always"):
+        raise argparse.ArgumentTypeError("--gpu-mode takes GPU=auto or GPU=always, e.g. vk:0000:11:00.0=always")
+    return key.strip(), mode
+
+
 def _parse_gpus(value: Optional[str]):
     """CUDA indices and vk:<PCI address> keys of GPUs only the Vulkan trainer uses (slots.py), e.g. 0,vk:0000:c5:00.0."""
     from .slots import parse_key
@@ -85,6 +92,7 @@ def cmd_serve(args) -> int:
         local_secret=os.environ.pop(LOCAL_SECRET_ENV, None) or None,
         trainer=args.trainer,
         cpu_jobs=args.cpu_jobs,
+        gpu_modes=dict(args.gpu_mode or []), migrate=not args.no_migrate,
     )
     if settings.allow_local_datasets and not settings.local_enabled:
         logging.getLogger("splatworker").info(
@@ -371,6 +379,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--trainer", default=os.environ.get("SPLATWORKER_TRAINER", "auto"),
                    choices=["auto", "gsplat", "vulkan"],
                    help="auto: gsplat on NVIDIA, the Vulkan trainer (experimental) on other GPUs")
+    s.add_argument("--gpu-mode", type=_parse_gpu_mode, action="append", metavar="GPU=auto|always",
+                   help="a slower GPU (e.g. vk:0000:11:00.0=always): auto (default) starts waiting jobs only while "
+                        "the faster GPUs are busy; always uses it like any other GPU")
+    s.add_argument("--no-migrate", action="store_true",
+                   help="don't move a job from a slower GPU to a faster one when that frees up")
     s.add_argument("--cpu-jobs", type=int, default=int(os.environ.get("SPLATWORKER_CPU_JOBS", "1")),
                    help="processing jobs at once; they hold a GPU only during GPU stages (default 1: COLMAP "
                         "already uses every core)")

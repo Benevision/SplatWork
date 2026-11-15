@@ -145,17 +145,28 @@ def _manager(tmp_path, slot_list):
     return m, job
 
 
-def test_slow_slot_takes_only_standalone_train_jobs_while_fast_ones_are_busy(tmp_path):
+def test_slower_slot_starts_waiting_train_jobs_while_fast_ones_are_busy(tmp_path):
     fast, slow = S.plan([0, "vk:0000:c5:00.0"], [RTX], BENSPC, "vulkan")
     m, job = _manager(tmp_path, [fast, slow])
-    train, block = job(config={}), job(config={"region": {"min": [0, 0, 0], "max": [1, 1, 1]}})
-    step, proc = job(config={}, parentJobId="w1"), job("process", request={})
+    small = {"maxGaussians": 200_000}
+    train, block = job(config=small), job(config={**small, "region": {"min": [0, 0, 0], "max": [1, 1, 1]}})
+    step, proc = job(config=small, parentJobId="w1"), job("process", request={})
     assert all(m.slot_takes(fast, j) for j in (train, block, step, proc))
     assert not any(m.slot_takes(slow, j) for j in (train, block, step, proc))   # the 4080 is free
     m.running[fast.key] = "j0"
-    assert m.slot_takes(slow, train)
-    assert not m.slot_takes(slow, block) and not m.slot_takes(slow, step) and not m.slot_takes(slow, proc)
-    assert not m.slot_takes(slow, job(config={"cameraIds": [1, 2]}))
+    # 1.7.8: block jobs and pipeline steps too (they move to the 4080 when it frees up); never processing
+    assert m.slot_takes(slow, train) and m.slot_takes(slow, block) and m.slot_takes(slow, step)
+    assert not m.slot_takes(slow, proc)
+    assert not m.slot_takes(slow, job(config={"maxGaussians": 50_000_000}))     # doesn't fit its memory
+
+
+def test_always_use_makes_a_slower_gpu_an_ordinary_slot(tmp_path):
+    sel = [0, "vk:0000:c5:00.0"]
+    fast, slow = S.plan(sel, [RTX], BENSPC, "vulkan", modes={"vk:0000:c5:00.0": "always"})
+    assert slow.slower and not slow.slow and slow.user_choice == "always"
+    assert slow.info()["slow"] is False and slow.info()["userChoice"] == "always" and slow.info()["slower"]
+    m, job = _manager(tmp_path, [fast, slow])
+    assert m.slot_takes(slow, job(config={"maxGaussians": 200_000, "region": {}}))   # even with the 4080 free
 
 
 def test_named_slot_and_old_style_devices(tmp_path):
@@ -241,8 +252,9 @@ def test_measured_speeds_in_the_settings_rows():
     rows = S.gpu_choices([RTX], BENSPC, None, _speeds(rtx=60.0, m610=1.2))
     assert rows[0]["subtitle"].startswith("16 GB · Measured 60.0 training steps/s on the standard scene (100% of "
                                           "the fastest). Used 3.0 GB.")
-    assert "Measured 1.2 training steps/s on the standard scene (2% of the fastest). Used 3.0 GB. Much slower" in \
-        rows[1]["subtitle"]
+    assert ("Measured 1.2 training steps/s on the standard scene (2% of the NVIDIA GeForce RTX 4080). Used 3.0 GB. "
+            "Slower GPU") in rows[1]["subtitle"]
+    assert rows[1]["slower"] and rows[1]["share"] == "about 2% of the NVIDIA GeForce RTX 4080"
     rows = S.gpu_choices([RTX], BENSPC, None, _speeds(rtx=40.0, m610=12.0))
     assert "Fast enough" in rows[1]["subtitle"]
 
@@ -291,7 +303,7 @@ def test_old_recipe_and_different_sizes(tmp_path):
     fast, slow = S.plan(sel, [RTX], BENSPC, "vulkan", mixed)
     assert slow.slow and slow.relative is None and slow.size == "medium" and fast.relative == 1.0
     rows = S.gpu_choices([RTX], BENSPC, None, mixed)
-    assert "on the medium scene. Used 3.0 GB. Much slower" in rows[1]["subtitle"]
+    assert "on the medium scene. Used 3.0 GB. Slower GPU" in rows[1]["subtitle"] and rows[1]["slower"]
     assert not gpuspeed.comparable(list(mixed.values())) and gpuspeed.comparable(list(_speeds(rtx=1, m610=1).values()))
 
 

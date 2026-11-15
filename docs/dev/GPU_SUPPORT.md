@@ -421,6 +421,28 @@ Radeon 610M, gfx1036 / RDNA2 — spec sheets say ~0.6 against ~49 TFLOPS, but th
 - **Tests**: `tests/test_slots.py` (fake GPU lists: BensPC, AMD-only, integrated-only laptop; measured speeds;
   scheduling; `/v1/info`; settings) and, on lavapipe in `test_vktrain.py`, `--list-devices` and a real measurement.
 
+- **Moving jobs (1.7.8)**: a slower slot (user choice *Only when faster GPUs are busy*, the default) starts a
+  waiting train job — block jobs and pipeline steps too, replacing 1.7.3's "standalone only" — while every faster
+  slot is busy, if the job's estimated memory (`slots.estimate_mb`: ~1.1 KB per splat at maxGaussians + the photos
+  + render buffers) fits 80 % of the slot's budget (`budget_mb`: an integrated GPU at most a quarter of the system
+  RAM). When a faster slot frees up, `JobManager` reserves it, sets the job's pause event, and on `JobPaused`
+  requeues the job first with an internal `pin` to that slot; it resumes there from `resume.vkstate` (same jobId,
+  same step; `JobStatus.slot` / `gpu` follow it; the log says "moved from … to … at step N"). Not moved: a job whose
+  time left there is under the handover (60 s) + its time left on the faster slot (measured speed ratio, else ×4),
+  a job that named its slot, or with *Move jobs to a faster GPU when one is free* off (`--no-migrate`). A user pause
+  during the move wins (the job stays paused); cancel works as ever; a restart drops the pin. Only Vulkan → Vulkan:
+  with gsplat chosen there are no slower Vulkan-only slots, and a gsplat ↔ Vulkan handover would lose the Adam
+  state. The state file holds no device choices (per-splat host data, compact moments by config): a state saved on
+  the CAS atomics path resumes on the native one (test_vktrain). *Always use, like any other GPU*
+  (`--gpu-mode vk:<pci>=always`) makes the slot ordinary: `slow` false, block jobs whenever it is free.
+
+**Test on BensPC: a block run moving to the 4080 (1.7.8).** With 1.7.8, the Vulkan trainer and the 610M ticked
+(*Only when faster GPUs are busy*), send a 2-block run from the Mac. Block 1 starts on the 4080 and block 2 on the
+610M (the Jobs page shows the GPU); when block 1 finishes, block 2's log says "moved from AMD Radeon 610M
+(integrated) to NVIDIA GeForce RTX 4080 at step N" and it finishes there. Send back both blocks' final PSNR (job
+logs) and the run's time, then the same run with the 610M unticked (both blocks on the 4080) to compare PSNR and
+time.
+
 **Test on BensPC (the first real RDNA2 run, same family as the RX 6700 XT).** In a terminal on BensPC, once the app
 shows SplatWork for Linux 1.7.3:
 

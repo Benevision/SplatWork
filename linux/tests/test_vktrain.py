@@ -193,6 +193,28 @@ def test_pause_resume_continues_the_same_run(build_dir, dataset, tmp_path, strat
     assert mean(b) == pytest.approx(mean(a), rel=0.1)
 
 
+def test_state_resumes_under_the_other_atomics_path(build_dir, dataset, tmp_path):
+    """Moving a job to another GPU (worker 1.7.8): the saved state holds no device choices — a state saved on the
+    CAS fallback resumes on whatever the device's start-up probe picks (native float atomics where they work, as
+    on CI's lavapipe) and continues the same training. (Forcing native atomics is no test: some lavapipe builds
+    get them wrong, which is why the probe exists.)"""
+    cfg = {**BASE, "iterations": 320, "evalInterval": 0, "previewInterval": 0}
+    rc, ref = run(build_dir, dataset, tmp_path, cfg, "--trace-every", "1", "--snapshot-at", "250",
+                  "--atomics", "cas", name="ref")
+    assert rc == 0, of(ref, "error")
+    snap = tmp_path / "ref-job" / "snapshot.vkstate"
+    rc, cont = run(build_dir, dataset, tmp_path, cfg, "--trace-every", "1", "--resume", str(snap),
+                   "--atomics", "auto", "--device", "0", name="cont")
+    assert rc == 0, of(cont, "error")
+    a = {m["step"]: m for m in of(ref, "trace")}
+    c = {m["step"]: m for m in of(cont, "trace")}
+    assert sorted(c) == list(range(251, 321))
+    rel = [abs(c[s]["loss"] - a[s]["loss"]) / a[s]["loss"] for s in range(251, 321)]
+    path = next((m["message"] for m in of(cont, "log") if "float atomics" in m["message"]), "")
+    print(f"cas → auto ({path.split('float atomics: ')[-1]}) resume: max relative loss difference steps 251-260 {max(rel[:10]):.2e}, 251-320 {max(rel):.2e}")
+    assert max(rel[:10]) < 1e-3 and max(rel) < 2e-2
+
+
 def test_checkpoint_and_cancel_on_stdin(build_dir, dataset, tmp_path):
     (tmp_path / "c.json").write_text(json.dumps({**BASE, "iterations": 100000}))
     p = subprocess.Popen([str(build_dir / "splatwork-vk-train"), "train", "--dataset", str(dataset), "--config",
