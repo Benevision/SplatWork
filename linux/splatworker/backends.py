@@ -52,6 +52,7 @@ class JobContext:
     checkpoint_event: threading.Event = field(default_factory=threading.Event)
     checkpoint: Callable[[int], None] = lambda step: None
     vulkan_index: Optional[int] = None   # the slot's Vulkan device (splatwork-vk-train --device); None: its own pick
+    trainer: Optional[str] = None        # train jobs: "gsplat" | "vulkan" asked for by the job; None: the default
     # processing jobs (gpulease.py): ask for the home GPU before a GPU stage — gpu_request(stage, need_mb, grant)
     # calls grant() once the lease is given; gpu_release() hands it back. None: the job holds a GPU throughout.
     gpu_request: Optional[Callable[[str, int, Callable[[], None]], None]] = None
@@ -129,7 +130,7 @@ class SubprocessBackend(Backend):
         pause = self._mp.Event()
         ckpt = self._mp.Event()
         granted = None
-        if ctx.kind == "train" and self.trainer_choice()["trainer"] == "vulkan":
+        if ctx.kind == "train" and (ctx.trainer or self.trainer_choice()["trainer"]) == "vulkan":
             from .vktrain import subprocess_entry
 
             args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), ctx.vulkan_index, q, cancel, pause, ckpt)

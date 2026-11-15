@@ -167,7 +167,7 @@ def plan(selected: Optional[Sequence[SlotKey]], cuda_gpus: Sequence[Dict[str, An
     ``speeds``: gpuspeed.load()."""
     vk_devices = _tidy(vk_devices)
     vulkan = trainer == "vulkan"
-    match = match_vulkan(cuda_gpus, vk_devices) if vulkan else {}
+    match = match_vulkan(cuda_gpus, vk_devices)
     chosen = None if selected is None else list(selected)
     slots: List[Slot] = []
     listed = {g["index"] for g in cuda_gpus}
@@ -180,7 +180,7 @@ def plan(selected: Optional[Sequence[SlotKey]], cuda_gpus: Sequence[Dict[str, An
         d = match.get(g["index"])
         slots.append(Slot(key=g["index"], name=g.get("name"), cuda=g["index"],
                           vulkan=d["index"] if d is not None else None,
-                          integrated=bool(d and _integrated(d)),
+                          integrated=bool(d and _integrated(d)) if vulkan else False,
                           memory_mb=g.get("memoryMB"), vendor=g.get("vendor", "nvidia"), device=d))
     if vulkan:
         extra = vulkan_only_devices(cuda_gpus, vk_devices)

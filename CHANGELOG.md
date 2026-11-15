@@ -6,6 +6,13 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.9 — compare the CUDA and Vulkan trainers in the app:** *Models & Benchmarks → Compare
+  trainers* (or `splatworker benchmark --compare-trainers [--quick] [--both-strategies]`) trains the benchmark
+  scene on the same GPU with gsplat and then with the Vulkan trainer, at the same settings and seed. It shows a
+  table with speed, total time, peak GPU memory, splats, held-out PSNR and SSIM, and a summary line such as
+  "Vulkan: 0.42× the speed, −0.3 dB". Results are kept in `trainer-comparisons.json` with the job logs. Both
+  trainers now report held-out SSIM, computed the same way. A training job can ask for a trainer
+  (`"trainer"` in `POST /v1/jobs`).
 - **SplatWork for Linux 1.7.8 — a slower GPU starts waiting jobs, which move to the faster GPU when it frees
   up:** on a PC with a fast and a slow GPU (an RTX 4080 and the Ryzen's Radeon 610M), a training job waiting for
   the busy fast GPU, block-run jobs included, now starts on the slower one if it fits its memory. When the fast GPU

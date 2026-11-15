@@ -1100,10 +1100,13 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         )
         return renders, alphas, info
 
+    eval_ssim: List[float] = []      # the last evaluate()'s mean holdout SSIM (same window as the Vulkan trainer)
+
     def evaluate(sh_degree):
         if not eval_views:
             return None
         psnrs = []
+        ssims = []
         with torch.no_grad():
             for k, v in enumerate(eval_views):
                 img, alpha, _, K, w2c = to_dev(v)
@@ -1118,6 +1121,12 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
                     gt = gt * ignore + pred.clamp(0, 1) * (1 - ignore)
                 mse = torch.mean((pred.clamp(0, 1) - gt) ** 2).item()
                 psnrs.append(-10 * math.log10(max(mse, 1e-10)))
+                try:   # 11×11 Gaussian window (σ 1.5), valid padding, as the Vulkan trainer's evaluation
+                    ssims.append(float(ssim(pred.clamp(0, 1).permute(2, 0, 1)[None].contiguous(),
+                                            gt.permute(2, 0, 1)[None].contiguous())))
+                except Exception:  # noqa: BLE001 - a view smaller than the window
+                    pass
+        eval_ssim[:] = [float(np.mean(ssims))] if ssims else []
         return float(np.mean(psnrs))
 
     def guard_message():
@@ -1435,7 +1444,10 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
 
         if cfg.evalInterval and eval_views and (cur % cfg.evalInterval == 0 or cur == cfg.iterations):
             last_eval_psnr = evaluate(sh_degree)
-            log(f"step {cur}: holdout PSNR {last_eval_psnr:.2f} dB")
+            log(f"step {cur}: holdout PSNR {last_eval_psnr:.2f} dB"
+                + (f", SSIM {eval_ssim[0]:.4f}" if eval_ssim else ""))
+            if eval_ssim:
+                progress.status(evalSsim=eval_ssim[0])
 
         if (bilagrid is not None and cfg.evalInterval and cur % cfg.evalInterval == 0 and cur < cfg.iterations
                 and guard.due(cur)):
@@ -1479,7 +1491,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         log(f"skybox saved: {skybox.save(Path(out_path)).name}")  # uncropped: the Mac merger crops with open outer faces
     elapsed = time.time() - t_start
     stats = {"numGaussians": final_n, "psnr": last_eval_psnr if last_eval_psnr is not None else psnr_ema,
-             "loss": loss_ema, "elapsedSeconds": elapsed, "previewStep": preview_step}
+             "loss": loss_ema, "elapsedSeconds": elapsed, "previewStep": preview_step, "trainer": "gsplat",
+             "evalPsnr": last_eval_psnr, "evalSsim": eval_ssim[0] if eval_ssim else None}
     log(f"finished in {elapsed:.1f}s, {final_n} gaussians written to {Path(out_path).name}")
     return stats
 

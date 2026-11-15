@@ -51,7 +51,8 @@ def test_benspc_with_the_610m_ticked():
 
 def test_gsplat_trainer_has_cuda_slots_only():
     slots = S.plan([0, "vk:0000:c5:00.0"], [RTX], BENSPC, "gsplat")
-    assert [(s.key, s.vulkan) for s in slots] == [(0, None)]
+    # the CUDA slot still knows its Vulkan device (a job may ask for the Vulkan trainer, 1.7.9)
+    assert [(s.key, s.vulkan, s.integrated) for s in slots] == [(0, 0, False)]
 
 
 def test_amd_only_pc_and_integrated_only_laptop():

@@ -261,6 +261,46 @@ def cmd_measure_gpus(args) -> int:
     return 0 if all(not r.get("error") for r in out.values()) else 1
 
 
+def _compare_trainers(args, client, paths, config_dir, loopback, progress) -> int:
+    """benchmark --compare-trainers: gsplat (CUDA) against the Vulkan trainer on the same GPU and scene."""
+    from .studio import benchmark
+    from .studio.client import ApiError
+
+    spec = benchmark.QUICK_SPEC if args.quick else benchmark.BenchmarkSpec()
+    scene = Path(args.scene_dir).expanduser() if args.scene_dir else paths.cache_dir / (
+        benchmark.SCENE_DIR + ("-compare-quick" if args.quick else ""))
+    strategies = ("mcmc", "adaptive") if args.both_strategies else ("mcmc",)
+    try:
+        rec = benchmark.compare_trainers(client, scene, spec, local=loopback, strategies=strategies, slot=args.slot,
+                                         quick=args.quick, progress=progress, tmp_dir=paths.cache_dir / "tmp")
+    except KeyboardInterrupt:
+        print("interrupted (a benchmark job may still be running on the worker)", file=sys.stderr)
+        return 130
+    except (ApiError, benchmark.BenchmarkError) as e:
+        print(f"compare failed: {getattr(e, 'message', None) or e}", file=sys.stderr)
+        return 1
+    print(compare_table(rec))
+    print(f"saved to {benchmark.save_comparison(config_dir, rec)}", file=sys.stderr)
+    return 0
+
+
+def compare_table(rec) -> str:
+    def f(v, fmt):
+        return format(v, fmt) if isinstance(v, (int, float)) else "–"
+    lines = [f"{rec.get('gpu') or rec.get('slot')}, {rec['size']} scene ({rec['spec']['splats']:,} splats, "
+             f"{rec['spec']['views']} photos {rec['spec']['width']}×{rec['spec']['height']}, "
+             f"{rec['spec']['steps']} steps)",
+             f"{'trainer':<8} {'strategy':<9} {'steps/s':>8} {'total s':>8} {'VRAM GB':>8} {'splats':>10} "
+             f"{'PSNR':>7} {'SSIM':>7}"]
+    for r in rec["runs"]:
+        lines.append(f"{r['trainer']:<8} {r['strategy']:<9} {f(r['stepsPerSecond'], '.2f'):>8} "
+                     f"{f(r['totalSeconds'], '.0f'):>8} "
+                     f"{f(r['peakVramMB'] / 1024 if r.get('peakVramMB') is not None else None, '.1f'):>8} "
+                     f"{f(r['numGaussians'], ','):>10} {f(r['evalPsnr'], '.2f'):>7} {f(r['evalSsim'], '.4f'):>7}")
+    lines += [c["summary"] for c in rec["comparisons"]]
+    return "\n".join(lines)
+
+
 def cmd_info(args) -> int:
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     from .gpu import adapters, backend_description, list_gpus, torch_backend, training_available
@@ -327,6 +367,8 @@ def cmd_benchmark(args) -> int:
         if msg != last["m"]:
             last["m"] = msg
             print(f"[{frac * 100:5.1f} %] {msg}", file=sys.stderr, flush=True)
+    if args.compare_trainers:
+        return _compare_trainers(args, client, paths, config_dir, loopback, progress)
     try:
         rec = benchmark.run(client, scene, spec, local=False, progress=progress, poll=args.poll,
                             device_id="local" if loopback else url.rstrip("/"),
@@ -432,6 +474,10 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--config-dir", help="where benchmarks.json is kept (default: the app's config dir)")
     b.add_argument("--scene-dir", help="where the synthetic scene is built and cached")
     b.add_argument("--quick", action="store_true", help="tiny scene and 200 steps: checks it works, not saved")
+    b.add_argument("--compare-trainers", action="store_true",
+                   help="train the benchmark scene with gsplat (CUDA) and then the Vulkan trainer on the same GPU, "
+                        "and compare speed, memory and quality (saved to trainer-comparisons.json)")
+    b.add_argument("--both-strategies", action="store_true", help="--compare-trainers: MCMC and adaptive")
     b.add_argument("--slot", help="run on this GPU slot only (an id from `info` / /v1/info \"slots\", e.g. "
                                   "vk:0000:c5:00.0); not saved")
     b.add_argument("--poll", type=float, default=1.0, help=argparse.SUPPRESS)

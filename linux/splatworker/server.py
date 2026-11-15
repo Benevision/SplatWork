@@ -57,7 +57,8 @@ FINAL_STATES = ("completed", "failed", "cancelled")
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
                "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin", "checkpointStep",
-               "pausedAt", "stage", "stageProgress", "stages", "trainJobId", "parentJobId", "resource", "slot")
+               "pausedAt", "stage", "stageProgress", "stages", "trainJobId", "parentJobId", "resource", "slot",
+               "evalSsim", "trainer")
 REMOTE_PAUSE_LIMIT = 3600.0         # another computer's paused job resumes by itself after this (s)
 LOCAL_PAUSE_LIMIT = 14 * 86400.0    # a paused job of this PC's app is cancelled (resume.pt freed) after this
 RESUME_FILES = ("resume.pt", "resume.vkstate")   # paused train job's saved state: CUDA trainer, Vulkan trainer
@@ -161,7 +162,7 @@ class Job:
                 if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
                          "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority",
                          "checkpointStep", "pausedAt", "stage", "stageProgress", "stages", "trainJobId",
-                         "resource", "slot"):
+                         "resource", "slot", "evalSsim", "trainer"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None
                     self.status[k] = v
@@ -317,7 +318,7 @@ class JobManager:
     # ---------------------------------------------------------------- queue
     def submit(self, kind: str, dataset_id: str, name: str, payload_key: str,
                payload: Dict[str, Any], total_steps: int, priority: int = 0, origin: Optional[str] = None,
-               parent: Optional[str] = None, slot: Optional[str] = None) -> Job:
+               parent: Optional[str] = None, slot: Optional[str] = None, trainer: Optional[str] = None) -> Job:
         prefix = {"train": "j", "census": "c"}.get(kind, "p")
         job_id = prefix + uuid.uuid4().hex[:11]
         job_dir = self.settings.jobs_dir / job_id
@@ -327,6 +328,8 @@ class JobManager:
             spec["parentJobId"] = parent
         if slot:
             spec["slot"] = slot          # runs on this slot only (/v1/info "slots" id)
+        if trainer:
+            spec["trainer"] = trainer    # this job's trainer, whatever the worker's default
         status = {
             "jobId": job_id, "kind": kind, "name": name, "state": "queued",
             "step": 0, "totalSteps": total_steps, "loss": None, "psnr": None,
@@ -611,6 +614,8 @@ class JobManager:
             return False
         if kind == "train" and not self._fits(slot, job):
             return False
+        if kind == "train" and job.spec.get("trainer") == "gsplat" and slot.cuda is None and slot.key is not None:
+            return False                     # a GPU only the Vulkan trainer can use
         if slot.slow:
             # a slower GPU starts a waiting train job (block jobs too) only while every faster GPU is busy; the
             # job moves to a faster one when it frees up (_migrate_to)
@@ -991,6 +996,13 @@ class JobManager:
             cancel_event=job.cancel_event, pause_event=job.pause_event, checkpoint_event=job.checkpoint_event,
             checkpoint=checkpoint,
         )
+        if kind == "train":
+            ctx.trainer = job.spec.get("trainer")          # this job's own choice (POST /v1/jobs "trainer")
+            try:
+                used = ctx.trainer or self.backend.trainer_choice().get("trainer")
+            except Exception:  # noqa: BLE001
+                used = ctx.trainer
+            job.update(trainer=used)
         if self.lease_mode and kind == "process":
             ctx.gpu_request = lambda stage, need, grant: self.gpu_request(job, slot, stage, need, grant)
             ctx.gpu_release = lambda: self.gpu_release(job.id)
@@ -1044,7 +1056,7 @@ class JobManager:
             if not (job.dir / "result.ply").is_file():
                 self._finish(job, "failed", "trainer finished without writing result.ply")
                 return
-            extra = {k: stats[k] for k in ("numGaussians", "psnr", "loss") if stats.get(k) is not None}
+            extra = {k: stats[k] for k in ("numGaussians", "psnr", "loss", "evalSsim") if stats.get(k) is not None}
             job.update(step=job.status.get("totalSteps"), **extra)
         elif kind == "census":
             if not (job.dir / "census.npz").is_file():
@@ -1245,7 +1257,9 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             trainer = backend.trainer_choice().get("trainer")
         except Exception:  # noqa: BLE001
             trainer = None
-        vk_devices = vktrain.list_devices()["devices"] if trainer == "vulkan" else []
+        # every Vulkan device when the program is there: CUDA slots learn their Vulkan index, so a job may ask
+        # for the Vulkan trainer on them (POST /v1/jobs "trainer"), whichever trainer is the default
+        vk_devices = vktrain.list_devices()["devices"]      # [] when the program isn't installed
         from . import gpuspeed
 
         devices = plan(settings.gpus, list_gpus(), vk_devices, trainer, gpuspeed.load(), settings.gpu_modes)
@@ -1416,6 +1430,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                         if choice.get("trainer") == "vulkan" else backend_description()),
             # ≥ 1.7.0: which trainer trains — {kind: "gsplat" | "vulkan" | null, experimental, reason, device?, …}
             "trainer": trainer_info,
+            # ≥ 1.7.9: the trainers a train job may ask for ("trainer" in POST /v1/jobs)
+            "trainers": vktrain.available_trainers(),
             "busy": manager.busy(),
             "queueLength": manager.queue_length(),
             "capabilities": caps,
@@ -1722,6 +1738,14 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             raise ApiError(400, f"invalid config: {e}")
         # Keep only keys the client sent, so context-dependent defaults resolve in the trainer.
         cfg_dict = {k: v for k, v in cfg.to_dict().items() if k in cfg.explicit}
+        trainer = body.get("trainer")
+        if trainer is not None:     # ≥ 1.7.9: this job's trainer (e.g. comparing gsplat with the Vulkan trainer)
+            avail = vktrain.available_trainers()
+            if trainer not in ("gsplat", "vulkan"):
+                raise ApiError(400, "trainer must be \"gsplat\" or \"vulkan\"")
+            if trainer not in avail:
+                raise ApiError(400, f"the {trainer} trainer isn't available on this worker (available: "
+                                    f"{', '.join(avail) or 'none'})")
         slot = body.get("slot")
         if slot is not None:
             ids = [s.id for s in manager.slots if s.takes_kind("train")]
@@ -1729,7 +1753,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                 raise ApiError(400, f"slot must be one of {ids} (/v1/info \"slots\")")
         job = manager.submit("train", dataset_id, _name(body, dataset_id), "config", cfg_dict,
                              total_steps=cfg.iterations, priority=_priority(request, body),
-                             origin=_origin(request), slot=slot)
+                             origin=_origin(request), slot=slot, trainer=trainer)
         return {"jobId": job.id}
 
     @app.post("/v1/process")

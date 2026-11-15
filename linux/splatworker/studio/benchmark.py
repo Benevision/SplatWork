@@ -294,17 +294,25 @@ def _upload_zip(client, folder: Path, tmp_dir: Path) -> tuple:
 def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: bool = True,
         progress: Optional[Callable[[str, float], None]] = None, cancelled: Optional[Callable[[], bool]] = None,
         priority: int = 1, poll: float = 1.0, device_id: str = "local", name: Optional[str] = None,
-        software: Optional[str] = None, tmp_dir: Optional[Path] = None, slot: Optional[str] = None) -> Dict[str, Any]:
+        software: Optional[str] = None, tmp_dir: Optional[Path] = None, slot: Optional[str] = None,
+        trainer: Optional[str] = None, extra_config: Optional[Dict[str, Any]] = None,
+        keep_dataset: Optional[str] = None) -> Dict[str, Any]:
     """Build the scene, train it on ``client``'s worker and return the result record (not saved).
 
     ``local``: register the folder with the desktop app's own server (no copy) instead of uploading a zip.
-    ``slot``: run on that job slot of the worker (``/v1/info`` "slots" id, worker ≥ 1.7.3)."""
+    ``slot``: run on that job slot of the worker (``/v1/info`` "slots" id, worker ≥ 1.7.3); ``trainer``: "gsplat" |
+    "vulkan" for this job (worker ≥ 1.7.9); ``extra_config`` overrides the recipe (e.g. strategy, evalInterval);
+    ``keep_dataset``: a dataset id already on the worker (not registered or deleted here). The record also has
+    the job's ``numGaussians``, ``evalSsim``, ``totalSeconds``, ``peakVramMB`` (GPU memory in use above the start,
+    from ``/v1/info``) and its ``log``."""
     say = progress or (lambda m, f: None)
     stop = cancelled or (lambda: False)
     scene = build_scene(scene_root, spec, lambda m, f: say(m, 0.1 * f), stop)
     info = client.info()
     up_mbps = None
-    if local:
+    if keep_dataset:
+        did = keep_dataset
+    elif local:
         did = client.local_dataset(scene)["datasetId"]
     else:
         say("Uploading the benchmark scene", 0.1)
@@ -312,11 +320,25 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
         up_mbps = nbytes / 1e6 / secs if secs > 0 else None
     job = None
     try:
-        body = {"datasetId": did, "config": spec.training_config(), "name": "SplatWork benchmark"}
+        body = {"datasetId": did, "config": {**spec.training_config(), **(extra_config or {})},
+                "name": f"SplatWork benchmark{' (' + trainer + ')' if trainer else ''}"}
         if local:
             body["priority"] = priority
         if slot:
             body["slot"] = slot
+        if trainer:
+            body["trainer"] = trainer
+
+        def vram_used() -> Optional[int]:
+            try:
+                gs = [g for g in client.info().get("gpus") or [] if isinstance(g, dict)]
+            except Exception:  # noqa: BLE001
+                return None
+            used = [int(g["memoryMB"]) - int(g["freeMemoryMB"]) for g in gs
+                    if g.get("memoryMB") is not None and g.get("freeMemoryMB") is not None]
+            return sum(used) if used else None
+        base_vram = vram_used()
+        peak_vram = 0
         job = client.post("/v1/jobs", body)["jobId"]
         samples: List[tuple] = []
         t_start = time.perf_counter()
@@ -328,6 +350,10 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
                     pass
                 raise BenchmarkCancelled()
             s = client.job(job)
+            if base_vram is not None and s.get("state") in ("loading", "training"):
+                v = vram_used()
+                if v is not None:
+                    peak_vram = max(peak_vram, v - base_vram)
             step = int(s.get("step") or 0)
             if s.get("state") == "training" and step > 0:
                 el = s.get("elapsedSeconds")
@@ -353,6 +379,10 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
                 secs = time.perf_counter() - t0
                 down_mbps = p.stat().st_size / 1e6 / secs if secs > 0 else None
         gpus = info.get("gpus") or []
+        try:
+            log_text = client.log(job)
+        except Exception:  # noqa: BLE001
+            log_text = ""
         say("Done", 1.0)
         return {"deviceId": device_id, "name": name or info.get("name") or "This PC",
                 "date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -363,11 +393,120 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
                 "megapixels": round(spec.megapixels, 2), "uploadMBps": up_mbps, "downloadMBps": down_mbps,
                 # quality at the end of the run (a broken GPU backend trains fast but badly)
                 "psnr": s.get("psnr"), "evalPsnr": s.get("evalPsnr"), "gpuVendor": (
-                    gpus[0].get("vendor") if gpus and isinstance(gpus[0], dict) else None)}
+                    gpus[0].get("vendor") if gpus and isinstance(gpus[0], dict) else None),
+                "trainer": s.get("trainer") or trainer, "numGaussians": s.get("numGaussians"),
+                "evalSsim": s.get("evalSsim"), "totalSeconds": s.get("elapsedSeconds"),
+                "peakVramMB": peak_vram if base_vram is not None else None, "log": log_text}
     finally:
         if job is not None:
             try:
                 client.delete(f"/v1/jobs/{job}")
             except Exception:  # noqa: BLE001
                 pass
-        client.delete_dataset(did)
+        if not keep_dataset:
+            client.delete_dataset(did)
+
+
+# ------------------------------------------------------------- CUDA vs Vulkan trainer
+COMPARE_FILE = "trainer-comparisons.json"
+COMPARE_LOGS = "trainer-comparison-logs"
+QUICK_SPEC = BenchmarkSpec(width=800, height=600, views=24, splats=200_000, steps=600, measure_from=200)
+
+
+def compare_trainers(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: bool = True,
+                     strategies=("mcmc",), slot: Optional[str] = None, quick: bool = False,
+                     progress: Optional[Callable[[str, float], None]] = None,
+                     cancelled: Optional[Callable[[], bool]] = None, tmp_dir: Optional[Path] = None,
+                     poll: float = 1.0) -> Dict[str, Any]:
+    """Train the benchmark scene on the same GPU with gsplat (CUDA) and then with the Vulkan trainer — same
+    recipe, seed and strategy, held-out PSNR / SSIM evaluated at the end by each — as two ordinary worker jobs
+    (the queue and pause rules apply). Returns {date, gpu, size, spec, slot, runs: [...], comparisons: [...]}."""
+    say = progress or (lambda m, f: None)
+    info = client.info()
+    avail = info.get("trainers") or []
+    missing = [t for t in ("gsplat", "vulkan") if t not in avail]
+    if missing:
+        raise BenchmarkError(" and ".join(
+            {"gsplat": "gsplat (the CUDA trainer: set up the NVIDIA GPU runtime)",
+             "vulkan": "the Vulkan trainer"}[t] for t in missing) + " isn't available on this worker")
+    if slot is None:      # a GPU both trainers can use: a CUDA GPU with a Vulkan device
+        both = [x for x in info.get("slots") or [] if x.get("cuda") is not None and x.get("vulkan") is not None]
+        slot = both[0]["id"] if both else None
+        if slot is None:
+            raise BenchmarkError("no GPU here runs both trainers (a CUDA GPU with a Vulkan driver)")
+    gpu = next((x.get("name") for x in info.get("slots") or [] if x.get("id") == slot), None)
+    scene = build_scene(scene_root, spec, lambda m, f: say(m, 0.1 * f), cancelled)
+    did = client.local_dataset(scene)["datasetId"] if local else _upload_zip(client, scene, Path(tmp_dir or scene.parent))[0]
+    runs: List[Dict[str, Any]] = []
+    order = [(st, t) for st in strategies for t in ("gsplat", "vulkan")]
+    try:
+        for i, (strategy, trainer) in enumerate(order):
+            def sub(m, f, i=i, trainer=trainer, strategy=strategy):
+                say(f"{trainer} ({strategy}): {m}", 0.1 + 0.9 * (i + min(max(f, 0.0), 1.0)) / len(order))
+            rec = run(client, scene_root, spec, local=local, progress=sub, cancelled=cancelled, poll=poll,
+                      slot=slot, trainer=trainer, keep_dataset=did, tmp_dir=tmp_dir,
+                      extra_config={"strategy": strategy, "evalInterval": spec.steps})
+            runs.append({"trainer": trainer, "strategy": strategy, "stepsPerSecond": rec["trainStepsPerSecond"],
+                         "totalSeconds": rec.get("totalSeconds"), "peakVramMB": rec.get("peakVramMB"),
+                         "numGaussians": rec.get("numGaussians"), "evalPsnr": rec.get("evalPsnr"),
+                         "evalSsim": rec.get("evalSsim"), "log": rec.get("log", "")})
+    finally:
+        try:
+            client.delete_dataset(did)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "gpu": gpu, "slot": slot, "size": "quick" if quick else "full", "spec": asdict(spec),
+            "worker": info.get("workerVersion"), "runs": runs, "comparisons": comparisons(runs)}
+
+
+def comparisons(runs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Per strategy: Vulkan against gsplat — speed ratio, PSNR / SSIM differences and a one-line summary."""
+    out = []
+    for strategy in dict.fromkeys(r["strategy"] for r in runs):
+        g = next((r for r in runs if r["strategy"] == strategy and r["trainer"] == "gsplat"), None)
+        v = next((r for r in runs if r["strategy"] == strategy and r["trainer"] == "vulkan"), None)
+        if not g or not v:
+            continue
+        ratio = v["stepsPerSecond"] / g["stepsPerSecond"] if g.get("stepsPerSecond") else None
+        dp = (v["evalPsnr"] - g["evalPsnr"]) if v.get("evalPsnr") is not None and g.get("evalPsnr") is not None else None
+        ds = (v["evalSsim"] - g["evalSsim"]) if v.get("evalSsim") is not None and g.get("evalSsim") is not None else None
+        parts = [f"{ratio:.2f}× the speed" if ratio is not None else "speed n/a"]
+        if dp is not None:
+            parts.append(f"{dp:+.2f} dB")
+        if ds is not None:
+            parts.append(f"SSIM {ds:+.3f}")
+        out.append({"strategy": strategy, "speedRatio": ratio, "psnrDiff": dp, "ssimDiff": ds,
+                    "summary": f"Vulkan ({strategy}): " + ", ".join(parts)})
+    return out
+
+
+def save_comparison(config_dir: Path, record: Dict[str, Any], keep: int = 20) -> Path:
+    """Newest first in trainer-comparisons.json (logs in trainer-comparison-logs/, not in the JSON)."""
+    config_dir = Path(config_dir)
+    logs = config_dir / COMPARE_LOGS
+    logs.mkdir(parents=True, exist_ok=True)
+    stamp = record["date"].replace(":", "").replace("-", "")
+    slim = dict(record, runs=[])
+    for r in record["runs"]:
+        name = f"{stamp}-{r['trainer']}-{r['strategy']}.log"
+        (logs / name).write_text(r.get("log") or "", encoding="utf-8")
+        slim["runs"].append({k: v for k, v in r.items() if k != "log"} | {"logFile": name})
+    path = config_dir / COMPARE_FILE
+    try:
+        old = json.loads(path.read_text(encoding="utf-8"))
+        old = old if isinstance(old, list) else []
+    except (OSError, ValueError):
+        old = []
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps([slim] + old[:keep - 1], indent=1), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def load_comparisons(config_dir: Path) -> List[Dict[str, Any]]:
+    try:
+        data = json.loads((Path(config_dir) / COMPARE_FILE).read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []

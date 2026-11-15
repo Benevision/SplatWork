@@ -280,6 +280,7 @@ class ModelsPage(Gtk.Box):
                     row.add_row(r)
             cards.add(row)
         box.append(self._benchmark_group())
+        box.append(self._compare_group())
         box.append(cards)
         sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
         clamp = Adw.Clamp(maximum_size=820)
@@ -386,6 +387,117 @@ class ModelsPage(Gtk.Box):
             except Exception as e:  # noqa: BLE001
                 GLib.idle_add(self._bench_done, f"Failed: {getattr(e, 'message', None) or e}")
         self.studio.with_server(go, lambda msg: self._bench_done(f"Failed: {msg}"))
+
+    # ------------------------------------------------------------ CUDA vs Vulkan trainer
+    def _compare_group(self) -> Gtk.Widget:
+        g = group("Compare trainers", "Trains the benchmark scene on the same GPU with gsplat (CUDA) and then with "
+                                      "the built-in Vulkan trainer — same settings and seed — and compares speed, "
+                                      "memory and held-out quality. Quick: a smaller scene, about 5 minutes; Full: "
+                                      "the standard scene, longer. Needs both trainers (an NVIDIA GPU with its "
+                                      "runtime set up).")
+        self.cmp_row = plain_row(title="gsplat vs Vulkan", subtitle="Not compared yet")
+        self.cmp_quick = Gtk.Button(label="Quick", valign=Gtk.Align.CENTER)
+        self.cmp_full = Gtk.Button(label="Full", valign=Gtk.Align.CENTER)
+        self.cmp_cancel = Gtk.Button(label="Cancel", valign=Gtk.Align.CENTER, visible=False)
+        self.cmp_quick.connect("clicked", lambda *_: self.run_compare(True))
+        self.cmp_full.connect("clicked", lambda *_: self.run_compare(False))
+        self.cmp_cancel.connect("clicked", lambda *_: self._cmp_flag.set())
+        for b in (self.cmp_cancel, self.cmp_quick, self.cmp_full):
+            self.cmp_row.add_suffix(b)
+            b.set_visible(self.studio is not None and b is not self.cmp_cancel)
+        g.add(self.cmp_row)
+        self.cmp_progress = Gtk.ProgressBar(show_text=True, visible=False, margin_top=8)
+        g.add(self.cmp_progress)
+        frame = Gtk.Frame(margin_top=8)
+        self.cmp_grid = Gtk.Grid(column_spacing=18, row_spacing=6, margin_top=10, margin_bottom=10,
+                                 margin_start=12, margin_end=12)
+        frame.set_child(self.cmp_grid)
+        g.add(frame)
+        self._cmp_flag = threading.Event()
+        self._cmp_running = False
+        self.refresh_compare()
+        return g
+
+    COMPARE_COLUMNS = ("Trainer", "Strategy", "Steps/s", "Total", "VRAM", "Splats", "PSNR", "SSIM")
+
+    @staticmethod
+    def compare_rows(rec):
+        """(heading, table cells, summary lines) of a saved comparison."""
+        def num(v, fmt, unit=""):
+            return format(v, fmt) + unit if isinstance(v, (int, float)) else "—"
+        spec = rec.get("spec") or {}
+        heading = (f"{rec.get('gpu') or rec.get('slot') or 'GPU'} · {rec.get('size', '')} scene "
+                   f"({int(spec.get('splats') or 0) / 1e6:.1f} M splats, {spec.get('steps', '?')} steps)")
+        cells = [("gsplat (CUDA)" if r["trainer"] == "gsplat" else "Vulkan", r["strategy"],
+                  num(r.get("stepsPerSecond"), ".1f"), num(r.get("totalSeconds"), ".0f", " s"),
+                  num(r["peakVramMB"] / 1024 if r.get("peakVramMB") is not None else None, ".1f", " GB"),
+                  num(r.get("numGaussians"), ","), num(r.get("evalPsnr"), ".2f", " dB"),
+                  num(r.get("evalSsim"), ".4f")) for r in rec.get("runs") or []]
+        return heading, cells, [c["summary"] for c in rec.get("comparisons") or []]
+
+    def refresh_compare(self) -> None:
+        while (c := self.cmp_grid.get_first_child()) is not None:
+            self.cmp_grid.remove(c)
+        recs = benchmark.load_comparisons(self.state.paths.config_dir)
+        if not recs:
+            self.cmp_grid.attach(label("No comparison yet (or `splatworker benchmark --compare-trainers --quick`).",
+                                       ("dim-label",)), 0, 0, 1, 1)
+            return
+        heading, cells, summary = self.compare_rows(recs[0])
+        self.cmp_grid.attach(label(heading, ("dim-label",)), 0, 0, len(self.COMPARE_COLUMNS), 1)
+        for col, title in enumerate(self.COMPARE_COLUMNS):
+            self.cmp_grid.attach(label(title, ("heading",), wrap=False), col, 1, 1, 1)
+        for r, row in enumerate(cells, start=2):
+            for col, text in enumerate(row):
+                self.cmp_grid.attach(label(text, ("numeric",) if col >= 2 else (), wrap=False,
+                                           xalign=1.0 if col >= 2 else 0.0), col, r, 1, 1)
+        for i, line in enumerate(summary):
+            self.cmp_grid.attach(label(line), 0, 2 + len(cells) + i, len(self.COMPARE_COLUMNS), 1)
+        if not self._cmp_running and summary:
+            self.cmp_row.set_subtitle(summary[0])
+
+    def run_compare(self, quick: bool) -> None:
+        if self.studio is None or self._cmp_running:
+            return
+        self._cmp_running = True
+        self._cmp_flag.clear()
+        for b in (self.cmp_quick, self.cmp_full):
+            b.set_sensitive(False)
+        self.cmp_cancel.set_visible(True)
+        self.cmp_progress.set_visible(True)
+        self.cmp_progress.set_fraction(0.0)
+        self.cmp_progress.set_text("Starting the worker server…")
+        cfg = self.state.paths.config_dir
+        spec = benchmark.QUICK_SPEC if quick else benchmark.BenchmarkSpec()
+        scene = self.state.paths.cache_dir / (benchmark.SCENE_DIR + ("-compare-quick" if quick else ""))
+
+        def progress(msg, frac):
+            GLib.idle_add(lambda: (self.cmp_progress.set_fraction(min(max(frac, 0.0), 1.0)),
+                                   self.cmp_progress.set_text(msg), False)[-1])
+
+        def go(client):
+            try:
+                rec = benchmark.compare_trainers(client, scene, spec, local=True, quick=quick, progress=progress,
+                                                 cancelled=self._cmp_flag.is_set)
+                benchmark.save_comparison(cfg, rec)
+                GLib.idle_add(self._cmp_done, (rec["comparisons"] or [{"summary": "done"}])[0]["summary"])
+            except benchmark.BenchmarkCancelled:
+                GLib.idle_add(self._cmp_done, "Cancelled")
+            except Exception as e:  # noqa: BLE001
+                GLib.idle_add(self._cmp_done, f"Failed: {getattr(e, 'message', None) or e}")
+        self.studio.with_server(go, lambda msg: self._cmp_done(f"Failed: {msg}"))
+
+    def _cmp_done(self, msg: str) -> bool:
+        self._cmp_running = False
+        for b in (self.cmp_quick, self.cmp_full):
+            b.set_sensitive(True)
+        self.cmp_cancel.set_visible(False)
+        self.cmp_progress.set_visible(False)
+        self.refresh_compare()
+        self.cmp_row.set_subtitle(msg)
+        if self.studio is not None:
+            self.studio.toast(f"Compare trainers: {msg}")
+        return False
 
     def _bench_done(self, msg: str) -> bool:
         self._bench_running = False

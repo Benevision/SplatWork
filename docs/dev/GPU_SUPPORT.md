@@ -436,6 +436,23 @@ Radeon 610M, gfx1036 / RDNA2 — spec sheets say ~0.6 against ~49 TFLOPS, but th
   the CAS atomics path resumes on the native one (test_vktrain). *Always use, like any other GPU*
   (`--gpu-mode vk:<pci>=always`) makes the slot ordinary: `slow` false, block jobs whenever it is free.
 
+**Compare trainers in the app (1.7.9) — replaces the manual `compare_training.sh` run.** The worker takes a
+per-job `"trainer"` (POST /v1/jobs; `/v1/info` `"trainers"` lists what is available) and both trainers now report
+held-out SSIM with the same window (11×11 Gaussian, σ 1.5, valid; checked against NumPy on the Vulkan trainer's
+dumps). `studio/benchmark.compare_trainers` trains the benchmark scene twice on the GPU both trainers can use (a
+CUDA slot with a Vulkan device) — gsplat, then Vulkan; same recipe, seed and strategy, eval at the last step — as
+two ordinary jobs, and records steps/s over the timed window, total time, peak GPU memory (from `/v1/info`, above
+the start), splats, PSNR and SSIM, plus "Vulkan: 0.42× the speed, −0.3 dB". Saved to `trainer-comparisons.json`
+(config dir) with the job logs in `trainer-comparison-logs/`.
+
+On BensPC (1.7.9, the NVIDIA runtime set up, trainer setting left on Automatic):
+1. *Models & Benchmarks → Compare trainers → Quick* (800×600, 24 photos, 200 k splats, 600 steps; a few minutes),
+   or `flatpak run --command=splatworker com.example.SplatWorker benchmark --compare-trainers --quick`.
+2. Then *Full* (the standard scene: 48 photos of 1600×1200, 1 M splats, 2,000 steps), or `… --compare-trainers
+   --both-strategies` for MCMC and adaptive.
+3. Send back the table (the CLI prints it; `trainer-comparisons.json` in `~/.var/app/com.example.SplatWorker/config/…`
+   has it too): steps/s, VRAM, PSNR, SSIM for each trainer.
+
 **Test on BensPC: a block run moving to the 4080 (1.7.8).** With 1.7.8, the Vulkan trainer and the 610M ticked
 (*Only when faster GPUs are busy*), send a 2-block run from the Mac. Block 1 starts on the 4080 and block 2 on the
 610M (the Jobs page shows the GPU); when block 1 finishes, block 2's log says "moved from AMD Radeon 610M

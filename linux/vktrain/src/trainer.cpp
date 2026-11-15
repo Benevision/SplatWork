@@ -212,6 +212,53 @@ void readExtras(In& in, Extras& x) {
     x.tThreshold = in.get<float>(); x.tHas = in.get<uint8_t>() != 0; x.tFraction = in.get<double>();
 }
 
+// trainer.py _ssim_fn (the torch fallback, as fused_ssim with padding "valid"): an 11×11 Gaussian window, σ 1.5,
+// C1 = 0.01², C2 = 0.03², over the valid region; mean over the channels and pixels. a, b: [3][h][w] in 0..1.
+double ssimValid(const std::vector<float>& a, const std::vector<float>& b, int w, int h) {
+    const int K = 11, R = 5;
+    if (w < K || h < K) return NAN;
+    double g[K], gs = 0;
+    for (int i = 0; i < K; i++) gs += g[i] = std::exp(-double((i - R) * (i - R)) / (2 * 1.5 * 1.5));
+    for (double& x : g) x /= gs;
+    const int ow = w - K + 1, oh = h - K + 1;
+    const size_t hw = size_t(w) * size_t(h);
+    double total = 0;
+    std::vector<double> tmp(size_t(ow) * size_t(h));
+    auto blur = [&](auto&& f, std::vector<double>& out) {   // separable valid convolution of f(y, x)
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < ow; x++) {
+                double v = 0;
+                for (int k = 0; k < K; k++) v += g[k] * f(y, x + k);
+                tmp[size_t(y) * size_t(ow) + size_t(x)] = v;
+            }
+        out.assign(size_t(ow) * size_t(oh), 0.0);
+        for (int y = 0; y < oh; y++)
+            for (int x = 0; x < ow; x++) {
+                double v = 0;
+                for (int k = 0; k < K; k++) v += g[k] * tmp[size_t(y + k) * size_t(ow) + size_t(x)];
+                out[size_t(y) * size_t(ow) + size_t(x)] = v;
+            }
+    };
+    std::vector<double> ma, mb, saa, sbb, sab;
+    for (int c = 0; c < 3; c++) {
+        const float* pa = &a[size_t(c) * hw];
+        const float* pb = &b[size_t(c) * hw];
+        auto at = [&](const float* p, int y, int x) { return double(p[size_t(y) * size_t(w) + size_t(x)]); };
+        blur([&](int y, int x) { return at(pa, y, x); }, ma);
+        blur([&](int y, int x) { return at(pb, y, x); }, mb);
+        blur([&](int y, int x) { return at(pa, y, x) * at(pa, y, x); }, saa);
+        blur([&](int y, int x) { return at(pb, y, x) * at(pb, y, x); }, sbb);
+        blur([&](int y, int x) { return at(pa, y, x) * at(pb, y, x); }, sab);
+        const double c1 = 0.01 * 0.01, c2 = 0.03 * 0.03;
+        for (size_t i = 0; i < ma.size(); i++) {
+            double m1 = ma[i], m2 = mb[i];
+            double s1 = saa[i] - m1 * m1, s2 = sbb[i] - m2 * m2, s12 = sab[i] - m1 * m2;
+            total += ((2 * m1 * m2 + c1) * (2 * s12 + c2)) / ((m1 * m1 + m2 * m2 + c1) * (s1 + s2 + c2));
+        }
+    }
+    return total / (3.0 * double(ow) * double(oh));
+}
+
 void saveState(const std::string& path, const Saved& s) {
     std::string tmp = path + ".tmp";
     {
@@ -647,11 +694,12 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
         // trainer.py evaluate(): holdout PSNR of the clamped render over the black (or fixed) background — or the
         // learned sky — with the photo's exposure-seeded colour correction (no bilateral grid), masked pixels scored
         // against the render itself, averaged over the holdout photos.
-        double evalDepthErr = 0, evalDepthCnt = 0;
+        double evalDepthErr = 0, evalDepthCnt = 0, evalSsimSum = 0, evalSsimCnt = 0;
         auto evaluate = [&](int shDeg, bool dump = false) -> double {
             if (nEval == 0) return NAN;
             double sum = 0;
             evalDepthErr = evalDepthCnt = 0;
+            evalSsimSum = evalSsimCnt = 0;
             for (size_t k = nTrain; k < views.size(); k++) {
                 const View& v = views[k];
                 RenderOpts ro = base;
@@ -685,6 +733,7 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                         }
                 }
                 double se = 0;
+                std::vector<float> predA(3 * hw), gtA(3 * hw);
                 for (size_t p = 0; p < hw; p++) {
                     float c[3], a, m;
                     v.pixel(p, c, a, m);
@@ -693,7 +742,14 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                         double gt = c[ch] * a + (1 - a) * evalBg[ch];
                         gt = gt * m + pred * (1 - m);
                         se += (pred - gt) * (pred - gt);
+                        predA[size_t(ch) * hw + p] = float(pred);
+                        gtA[size_t(ch) * hw + p] = float(gt);
                     }
+                }
+                double ss = ssimValid(predA, gtA, v.width, v.height);
+                if (!std::isnan(ss)) {
+                    evalSsimSum += ss;
+                    evalSsimCnt += 1;
                 }
                 if (dump && !opt.dumpEval.empty()) {
                     fs::create_directories(opt.dumpEval);
@@ -780,7 +836,7 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
 
         // ---------------------------------------------------------- loop state
         std::vector<uint32_t> order;
-        double psnrEma = NAN, lossEma = NAN, lastEval = NAN;
+        double psnrEma = NAN, lossEma = NAN, lastEval = NAN, lastEvalSsim = NAN;
         int64_t previewStep = -1;
         bool capLogged = false;
         int32_t guardResets = 0, guardStrikes = 0;
@@ -1116,7 +1172,12 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             }
             if (cfg.evalInterval && nEval && (cur % cfg.evalInterval == 0 || cur == cfg.iterations)) {
                 lastEval = evaluate(shDeg, cur == cfg.iterations);
-                em.log(fmt("step %lld: holdout PSNR %.2f dB", (long long)cur, lastEval));
+                lastEvalSsim = evalSsimCnt > 0 ? evalSsimSum / evalSsimCnt : NAN;
+                if (std::isnan(lastEvalSsim)) em.log(fmt("step %lld: holdout PSNR %.2f dB", (long long)cur, lastEval));
+                else {
+                    em.log(fmt("step %lld: holdout PSNR %.2f dB, SSIM %.4f", (long long)cur, lastEval, lastEvalSsim));
+                    em.status({{"evalSsim", lastEvalSsim}});
+                }
                 if (evalDepthCnt > 0)
                     em.log(fmt("step %lld: holdout depth error %.4f (mean |rendered depth − depth map|)", (long long)cur,
                                evalDepthErr / evalDepthCnt));
@@ -1239,7 +1300,8 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                    1e3 * sumDensify / double(std::max<int64_t>(steps, 1)), (long long)steps));
         em.log(fmt("finished in %.1fs, %zu gaussians written to %s", elapsed, finalN, fs::path(opt.outPath).filename().string().c_str()));
         em.emit({{"type", "done"}, {"numGaussians", finalN}, {"psnr", numOrNull(std::isnan(lastEval) ? psnrEma : lastEval)},
-                 {"evalPsnr", numOrNull(lastEval)}, {"trainPsnr", numOrNull(psnrEma)}, {"loss", numOrNull(lossEma)},
+                 {"evalPsnr", numOrNull(lastEval)}, {"evalSsim", numOrNull(lastEvalSsim)},
+                 {"trainPsnr", numOrNull(psnrEma)}, {"loss", numOrNull(lossEma)},
                  {"elapsedSeconds", elapsed}, {"trainSeconds", trainSec}, {"steps", steps},
                  {"stepsPerSecond", trainSec > 0 ? double(steps) / trainSec : 0.0},
                  {"previewStep", previewStep >= 0 ? json(previewStep) : json(nullptr)},

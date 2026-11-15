@@ -171,6 +171,19 @@ def available() -> bool:
     return usable(device_info()) is None
 
 
+def available_trainers() -> List[str]:
+    """The trainers a train job can use here: "gsplat" (CUDA runtime installed) and / or "vulkan"."""
+    from .gpu import training_available
+
+    out = ["gsplat"] if training_available() else []
+    try:
+        if available():
+            out.append("vulkan")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def _nvidia_present() -> bool:
     from .gpu import adapters, list_gpus
 
