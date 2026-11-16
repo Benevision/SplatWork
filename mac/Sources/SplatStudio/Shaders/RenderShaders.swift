@@ -76,7 +76,11 @@ kernel void project_splats(device const float4* gpos [[buffer(0)]],
     if (fl & 1) return; // deleted
     float3 mean = po.xyz;
     uint mode = (cam.flags >> 8) & 0xFF;
-    if ((cam.flags & 2) && (any(mean < cam.cropMin.xyz) || any(mean > cam.cropMax.xyz))) return;
+    if (cam.flags & 2) {
+        float3 c = 0.5f * (cam.cropMin.xyz + cam.cropMax.xyz), d = mean - c;
+        float3 q = float3(dot(cam.cropR0.xyz, d), dot(cam.cropR1.xyz, d), dot(cam.cropR2.xyz, d)) + c;
+        if (any(q < cam.cropMin.xyz) || any(q > cam.cropMax.xyz)) return;
+    }
     float4 c0 = gcov[i*2], c1 = gcov[i*2+1];
     float sc2 = cam.splatScale * cam.splatScale;
     float3 t; float3x3 J, W;

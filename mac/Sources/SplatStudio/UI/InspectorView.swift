@@ -199,8 +199,12 @@ struct EditPanel: View {
                 SettingRow(id: "edit.cropBox") { Toggle("", isOn: $model.viewer.cropEnabled).labelsHidden() }
                 if model.viewer.cropEnabled || model.mode == .advanced {
                     axisRow("X", 0); axisRow("Y", 1); axisRow("Z", 2)
+                    Text("Rotation").font(.caption).foregroundStyle(.secondary).padding(.top, 2)
+                    rotationRow("X", 0); rotationRow("Y", 1); rotationRow("Z", 2)
                     HStack {
-                        Button("Fit to scene") { if let s = model.scene { model.viewer.cropMin = s.boundsMin; model.viewer.cropMax = s.boundsMax } }
+                        Button("Fit to scene") { model.fitCropBox() }
+                            .help("Fits the box to the splats along its own (turned) axes")
+                        Button("Reset rotation") { model.viewer.cropRotation = .zero }.disabled(model.viewer.cropRotation == .zero)
                         Spacer()
                         Button("Apply crop") { model.applyCrop() }.buttonStyle(.borderedProminent).disabled(!model.viewer.cropEnabled)
                     }
@@ -232,6 +236,16 @@ struct EditPanel: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Turns the crop box about its centre (degrees about a world axis).
+    private func rotationRow(_ name: String, _ a: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(name).frame(width: 14)
+            Slider(value: Binding(get: { Double(model.viewer.cropRotation[a]) },
+                                  set: { model.viewer.cropRotation[a] = Float(($0 / 1).rounded()) }), in: -180...180)
+            Text("\(Int(model.viewer.cropRotation[a]))°").monospacedDigit().font(.caption).frame(width: 40, alignment: .trailing)
         }
     }
 

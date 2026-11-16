@@ -6,6 +6,10 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **The crop box can be turned.** *Edit → Crop box → Rotation*: X, Y and Z sliders turn the box about its centre, for
+  scenes that don't line up with the axes (a van parked at an angle). *Fit to scene* fits the box along its own turned
+  axes, and *Reset rotation* squares it up again. Hiding, *Apply crop* and the box outline all follow the rotation.
+
 - **Several projects can prepare at once.** *New* while a project is preparing starts another one alongside it, for
   example on this Mac while the first uploads to a worker. The preparation page also has a *New Project…* button.
   Each running preparation gets its own progress button in the toolbar. Each project page shows and stops its own

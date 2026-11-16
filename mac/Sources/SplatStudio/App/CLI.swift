@@ -432,6 +432,7 @@ enum CLI {
                 var st = ViewerSettings()
                 if a.contains("--aa") { st.antialiasOverride = true }
                 if a.contains("--no-aa") { st.antialiasOverride = false }
+                if let n = value("--max-sh").flatMap(Int.init) { st.maxSHDegree = max(0, min(3, n)) }
                 if let m = value("--mode").flatMap(Int.init), let dm = ViewerSettings.DisplayMode(rawValue: m) { st.displayMode = dm }
                 if st.displayMode == .coverage, let dsPath = value("--dataset") {
                     let t0 = Date()

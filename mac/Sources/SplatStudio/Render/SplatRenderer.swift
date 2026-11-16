@@ -4,7 +4,7 @@ import MetalKit
 import QuartzCore
 import simd
 
-/// Mirrors `CameraUniforms` in CommonShaders (176 bytes).
+/// Mirrors `CameraUniforms` in CommonShaders (224 bytes).
 struct CameraUniforms {
     var worldToCam = matrix_identity_float4x4
     var intr = SIMD4<Float>()
@@ -17,6 +17,15 @@ struct CameraUniforms {
     var cropMin = SIMD4<Float>()
     var cropMax = SIMD4<Float>()
     var misc = SIMD4<Float>()
+    /// Crop box: rows of the world → box-axes rotation (identity when not rotated).
+    var cropR0 = SIMD4<Float>(1, 0, 0, 0)
+    var cropR1 = SIMD4<Float>(0, 1, 0, 0)
+    var cropR2 = SIMD4<Float>(0, 0, 1, 0)
+
+    mutating func setCropRotation(_ m: simd_float3x3) {
+        let t = m.transpose     // columns of the transpose = rows of m
+        cropR0 = SIMD4(t.columns.0, 0); cropR1 = SIMD4(t.columns.1, 0); cropR2 = SIMD4(t.columns.2, 0)
+    }
 
     static func make(worldToCam: simd_float4x4, intr: SIMD4<Float>, width: Int, height: Int, count: Int, shDegree: Int) -> CameraUniforms {
         var u = CameraUniforms()
@@ -64,6 +73,36 @@ struct ViewerSettings: Equatable, Codable {
     var cropEnabled = false
     var cropMin = SIMD3<Float>(-1, -1, -1)
     var cropMax = SIMD3<Float>(1, 1, 1)
+    /// Crop box turned about its centre: degrees about the world X, Y and Z axes (applied X, then Y, then Z).
+    var cropRotation = SIMD3<Float>(0, 0, 0)
+
+    /// The box's rotation (box axes → world).
+    var cropBoxToWorld: simd_float3x3 {
+        let r = cropRotation * (.pi / 180)
+        let cx = cos(r.x), sx = sin(r.x), cy = cos(r.y), sy = sin(r.y), cz = cos(r.z), sz = sin(r.z)
+        let Rx = simd_float3x3(rows: [SIMD3(1, 0, 0), SIMD3(0, cx, -sx), SIMD3(0, sx, cx)])
+        let Ry = simd_float3x3(rows: [SIMD3(cy, 0, sy), SIMD3(0, 1, 0), SIMD3(-sy, 0, cy)])
+        let Rz = simd_float3x3(rows: [SIMD3(cz, -sz, 0), SIMD3(sz, cz, 0), SIMD3(0, 0, 1)])
+        return Rz * Ry * Rx
+    }
+    var cropWorldToBox: simd_float3x3 { cropBoxToWorld.transpose }
+    var cropCentre: SIMD3<Float> { (cropMin + cropMax) / 2 }
+
+    /// Whether a world point is inside the (possibly turned) crop box.
+    func cropContains(_ p: SIMD3<Float>, worldToBox w: simd_float3x3? = nil) -> Bool {
+        let c = cropCentre
+        let q = (w ?? cropWorldToBox) * (p - c) + c
+        return !(any(q .< cropMin) || any(q .> cropMax))
+    }
+
+    /// The box's 8 corners in world space (bit 0: x, bit 1: y, bit 2: z of max vs min).
+    var cropCorners: [SIMD3<Float>] {
+        let c = cropCentre, R = cropBoxToWorld
+        return (0..<8).map { i in
+            let q = SIMD3<Float>(i & 1 == 0 ? cropMin.x : cropMax.x, i & 2 == 0 ? cropMin.y : cropMax.y, i & 4 == 0 ? cropMin.z : cropMax.z)
+            return c + R * (q - c)
+        }
+    }
     var highlightSelection = true
     var lazySort = true
     var antialiasOverride: Bool? = nil
@@ -221,6 +260,7 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
             uniforms.flags = (aa ? 1 : 0) | (st.cropEnabled ? 2 : 0) | (UInt32(st.displayMode.rawValue) << 8)
             uniforms.cropMin = SIMD4(st.cropMin, cam.near)
             uniforms.cropMax = SIMD4(st.cropMax, cam.far)
+            uniforms.setCropRotation(st.cropWorldToBox)
             uniforms.misc = SIMD4(st.alphaCutoff, st.highlightSelection ? 1 : 0, 0.3, 0)
             let key = (cam, st, ObjectIdentifier(scene), size)
             let unchanged = st.lazySort && lastKey.map { $0.0 == key.0 && $0.1 == key.1 && $0.2 == key.2 && $0.3 == key.3 } == true && gen == lastEditGeneration
@@ -330,6 +370,7 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         u.splatScale = st.splatScale
         u.flags = ((st.antialiasOverride ?? scene.antialiased) ? 1 : 0) | (st.cropEnabled ? 2 : 0) | (UInt32(st.displayMode.rawValue) << 8)
         u.cropMin = SIMD4(st.cropMin, cam.near); u.cropMax = SIMD4(st.cropMax, cam.far)
+        u.setCropRotation(st.cropWorldToBox)
         u.misc = SIMD4(st.alphaCutoff, 0, 0.3, 0)
         let cb = ctx.queue.makeCommandBuffer()!
         let enc = cb.makeComputeCommandEncoder()!

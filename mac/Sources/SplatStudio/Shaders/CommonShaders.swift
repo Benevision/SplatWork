@@ -57,6 +57,9 @@ struct CameraUniforms {
     float4 cropMin;        // xyz, w = near plane
     float4 cropMax;        // xyz, w = far plane (depth colour mapping / sort range)
     float4 misc;           // x: alpha cutoff, y: highlight selection, z: dilation, w: unused
+    float4 cropR0;         // crop box: rows of the world → box-axes rotation (about the box centre)
+    float4 cropR1;
+    float4 cropR2;
 };
 
 // Projects a 3D covariance to the screen (EWA splatting, 3DGS eq. 5) and returns the

@@ -341,12 +341,10 @@ final class AppModel {
         guard onlyKept, let sc = scene, sc.count == g.count else { return g }
         let f = sc.flagsPointer
         var keep = [Bool](repeating: true, count: g.count)
+        let w = viewer.cropWorldToBox
         for i in 0..<g.count {
             if f[i] & 1 != 0 { keep[i] = false; continue }
-            if viewer.cropEnabled {
-                let p = g.position(i)
-                if any(p .< viewer.cropMin) || any(p .> viewer.cropMax) { keep[i] = false }
-            }
+            if viewer.cropEnabled, !viewer.cropContains(g.position(i), worldToBox: w) { keep[i] = false }
         }
         if keep.contains(false) { g = g.filtered(keep) }
         return g
@@ -457,7 +455,7 @@ final class AppModel {
         selectedCount = 0; deletedCount = 0
         viewer.cropEnabled = false
         viewer.showCropBox = false
-        viewer.cropMin = ViewerSettings().cropMin; viewer.cropMax = ViewerSettings().cropMax
+        viewer.cropMin = ViewerSettings().cropMin; viewer.cropMax = ViewerSettings().cropMax; viewer.cropRotation = .zero
         worldUp = SIMD3(0, -1, 0)
         inspectorTab = .view
         sidebar = .viewer
@@ -507,9 +505,8 @@ final class AppModel {
             }
         }
         if viewer.showCropBox || viewer.cropEnabled {
-            let a = viewer.cropMin, b = viewer.cropMax
             let col = SIMD4<Float>(1, 0.8, 0.2, 1)
-            let v = (0..<8).map { i in SIMD3<Float>(i & 1 == 0 ? a.x : b.x, i & 2 == 0 ? a.y : b.y, i & 4 == 0 ? a.z : b.z) }
+            let v = viewer.cropCorners
             for (i, j) in [(0,1),(2,3),(4,5),(6,7),(0,2),(1,3),(4,6),(5,7),(0,4),(1,5),(2,6),(3,7)] {
                 lines.append(.init(pos: v[i], color: col)); lines.append(.init(pos: v[j], color: col))
             }
@@ -586,13 +583,24 @@ final class AppModel {
         }
     }
 
+    /// Fits the crop box to the visible splats in its own (turned) axes.
+    func fitCropBox() {
+        guard let sc = scene, sc.count > 0 else { return }
+        let w = viewer.cropWorldToBox, p = sc.positionsPointer, f = sc.flagsPointer
+        var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+        for i in 0..<sc.count where f[i] & 1 == 0 {
+            let q = w * SIMD3(p[i].x, p[i].y, p[i].z)
+            lo = simd_min(lo, q); hi = simd_max(hi, q)
+        }
+        guard lo.x <= hi.x else { return }
+        let centre = viewer.cropBoxToWorld * ((lo + hi) / 2), half = (hi - lo) / 2
+        viewer.cropMin = centre - half; viewer.cropMax = centre + half
+    }
+
     func applyCrop() {
-        let a = viewer.cropMin, b = viewer.cropMax
+        let box = viewer, w = viewer.cropWorldToBox
         modifyFlags { f, p, n in
-            for i in 0..<n {
-                let q = SIMD3(p[i].x, p[i].y, p[i].z)
-                if any(q .< a) || any(q .> b) { f[i] |= 1 }
-            }
+            for i in 0..<n where !box.cropContains(SIMD3(p[i].x, p[i].y, p[i].z), worldToBox: w) { f[i] |= 1 }
         }
         viewer.cropEnabled = false
         updateCameraLines()

@@ -482,5 +482,6 @@ private struct CameraLineUpdates: ViewModifier {
             .onChange(of: model.viewer.showCropBox) { model.updateCameraLines() }
             .onChange(of: model.viewer.cropMin) { model.updateCameraLines() }
             .onChange(of: model.viewer.cropMax) { model.updateCameraLines() }
+            .onChange(of: model.viewer.cropRotation) { model.updateCameraLines() }
     }
 }
