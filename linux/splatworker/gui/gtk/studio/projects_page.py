@@ -350,6 +350,8 @@ class ProjectsPage(Gtk.Box):
         src = f"{opts.source_kind}: {opts.source}" if opts else "made on another machine"
         stats = meta.get("datasetStats") or {}
         cams = f" · {stats.get('cameras')} cameras" if stats.get("cameras") else ""
+        if meta.get("processedOn"):
+            cams += f" · processed on {meta['processedOn']}"
         self.d_sub.set_text(f"{p.root}\n{src}{cams}")
         active = bool(run and run.active)
         self.stop_btn.set_visible(active)

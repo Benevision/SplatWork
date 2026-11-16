@@ -188,8 +188,20 @@ class Device:
 
     @property
     def slots(self) -> int:
-        """Jobs it runs at once: one per GPU on a Linux worker, one on a Mac / iPhone."""
-        return max(1, len(self.gpus)) if self.kind == "linux" else 1
+        """Jobs it runs at once: on a Linux worker its training slots (``/v1/info`` "slots", ≥ 1.7.3 — slower GPUs
+        included from 1.7.8, they start waiting jobs and hand them to a faster GPU), else one per GPU; one on a
+        Mac / iPhone."""
+        if self.kind != "linux":
+            return 1
+        sl = (self.info or {}).get("slots")
+        import re
+
+        ver = tuple(int(x) for x in re.findall(r"\d+", str((self.info or {}).get("workerVersion") or ""))[:3])
+        if isinstance(sl, list) and ver >= (1, 7, 8):
+            train = [x for x in sl if isinstance(x, dict) and "train" in (x.get("kinds") or ["train"])]
+            if train:
+                return len(train)
+        return max(1, len(self.gpus))
 
     @property
     def throughput(self) -> float:

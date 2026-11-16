@@ -8,7 +8,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from ....studio.presets import FEATURES, PRESETS, SOURCE_KINDS, ProjectOptions
 from ....studio.projects import Project
-from .devices_page import train_on_row
+from .devices_page import missing_models_text, process_on_row, train_on_row
 from .rows import combo_row, group, plain_row, spin_row, switch_row, training_settings_expander
 
 FOLDER_SOURCES = ("photos", "photos360", "colmap", "dataset")
@@ -137,6 +137,16 @@ class NewProjectDialog(Adw.Window):
         page.add(prep)
 
         # ---------------------------------------------------------- cameras
+        prep = group("Processing device")
+        prep.add(process_on_row(controller, o, lambda v: self._prep_changed()))
+        self.video_worker_row = switch_row("Split videos on the worker", o.video_on_worker,
+                                           lambda v: setattr(o, "video_on_worker", v), "net.videoOnWorker")
+        prep.add(self.video_worker_row)
+        self.models_notice = plain_row(title="Models missing on the worker", subtitle="")
+        prep.add(self.models_notice)
+        self.processing_group = prep
+        page.add(prep)
+
         cams = group("Camera solving")
         self.solver_row = combo_row("Camera solver", [("learned", "COLMAP / GLOMAP + learned features"),
                                                       ("poses", "Use poses from the source")], o.solver,
@@ -165,7 +175,8 @@ class NewProjectDialog(Adw.Window):
             self.mask_switches[model] = r
         masks.add(switch_row("Mask fixed parts of the frame", o.mask_static, lambda v: setattr(o, "mask_static", v),
                              "mask.staticRegions"))
-        masks.add(switch_row("Sky → learned skybox", o.sky, lambda v: setattr(o, "sky", v), "mask.sky"))
+        masks.add(switch_row("Sky → learned skybox", o.sky, lambda v: (setattr(o, "sky", v), self._prep_changed()),
+                             "mask.sky"))
         masks.add(switch_row("Invert mask", o.mask_invert, lambda v: setattr(o, "mask_invert", v), "mask.invert"))
         self.masks_group = masks
         page.add(masks)
@@ -198,6 +209,16 @@ class NewProjectDialog(Adw.Window):
         if on:
             ms.append(model)
         self.o.mask_models = ms
+        self._prep_changed()
+
+    def _prep_changed(self) -> None:
+        """Process on / masks / source changed: the video switch and the missing-models notice follow."""
+        o = self.o
+        worker = o.process_on not in ("", "local")
+        self.video_worker_row.set_visible(worker and o.source_kind in ("video", "video360", "homevideo", "stereo"))
+        text = missing_models_text(self.ctl, o)
+        self.models_notice.set_subtitle(text)
+        self.models_notice.set_visible(bool(text))
 
     def _kind(self, kind: str) -> None:
         self.o.source_kind = kind
@@ -220,6 +241,8 @@ class NewProjectDialog(Adw.Window):
         self.prep_group.set_visible(kind != "dataset")
         self.refine_row.set_visible(kind == "capture")
         self.solver_row.set_visible(kind == "capture")
+        self.processing_group.set_visible(kind not in ("dataset",))
+        self._prep_changed()
         if kind == "capture":
             self.o.matching = "sequential"
         self.path_row.set_title({"photos": "Photos folder", "video": "Video file", "video360": "360° video file",

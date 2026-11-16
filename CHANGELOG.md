@@ -6,6 +6,14 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.11 — Process on another worker, as on the Mac:** *New Project → Processing device →
+  Process on* offers *This PC* or any worker. Workers that can't process or are offline are marked, and the choice is
+  remembered. Video splitting, masks, the sky and camera solving then run on that worker: the photos (or the video,
+  with *Split videos on the worker*) go up once and stay there, so later steps, and training on that worker, don't
+  send them again. Only the masks and settings a step needs go up, and only its output comes back. Steps the worker
+  can't do run on this PC: a model it doesn't have (the dialog says which), or an error while splitting or masking.
+  A worker that doesn't answer within 20 s means this PC. The project shows "processed on …". Block-parallel
+  training from the Studio now gives a Linux worker on 1.7.8 or newer one block per training GPU, as the Mac does.
 - **The crop box can be turned.** *Edit → Crop box → Rotation*: X, Y and Z sliders turn the box about its centre, for
   scenes that don't line up with the axes (a van parked at an angle). *Fit to scene* fits the box along its own turned
   axes, and *Reset rotation* squares it up again. Hiding, *Apply crop* and the box outline all follow the rotation.

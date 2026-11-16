@@ -88,6 +88,7 @@ class LocalPipeline:
         self.remote_jobs: Dict[str, tuple] = {}
         self._remote_lock = threading.Lock()
         self._registered: List[str] = []
+        self.remote = None              # studio/remote_prep.RemotePrep while processing on another worker
         self._stage_index = -1
         self._titles = stage_titles(options, self.train_enabled)
         self._stage_started = 0.0
@@ -173,20 +174,28 @@ class LocalPipeline:
         self._registered.append(info["datasetId"])
         return info["datasetId"]
 
-    def _wait(self, job_id: str, on_status: Optional[Callable[[Dict], None]] = None) -> Dict:
-        self.current_job = job_id
+    def _wait(self, job_id: str, on_status: Optional[Callable[[Dict], None]] = None, client: Optional[Client] = None,
+              where: Optional[str] = None) -> Dict:
+        """Follow a job to its end on this PC's server (or ``client``'s worker, named ``where`` in the progress)."""
+        local = client is None
+        client = client or self.client
+        if local:
+            self.current_job = job_id
         try:
             while True:
                 if self.cancel_event.is_set():
                     try:
-                        self.client.cancel(job_id)
+                        client.cancel(job_id)
                     except ApiError:
                         pass
-                s = self.client.job(job_id)
+                s = client.job(job_id)
                 self.emit("job", s)
                 total = s.get("totalSteps") or 0
                 if total:
-                    self._progress(min(1.0, (s.get("step") or 0) / total), s.get("message") or "")
+                    msg = s.get("message") or ""
+                    if where:
+                        msg = f"On {where}: {msg}" if msg else f"On {where}"
+                    self._progress(min(1.0, (s.get("step") or 0) / total), msg)
                 if on_status:
                     on_status(s)
                 state = s.get("state")
@@ -201,7 +210,8 @@ class LocalPipeline:
                 # "paused" is not finished: keep waiting (Stop still cancels it) until it is resumed and ends
                 time.sleep(self.poll_seconds)
         finally:
-            self.current_job = None
+            if local:
+                self.current_job = None
 
     def _process(self, dataset_id: str, request: Dict, title: str, dest: Path) -> Dict:
         """Run a processing request; its output dataset is merged into ``dest`` (hard links)."""
@@ -237,10 +247,59 @@ class LocalPipeline:
             self.project.update(stageDurations=self.durations)
         return None
 
+    def _remote_prep(self):
+        """"Process on" a worker (studio/remote_prep.py): that worker if it answers and can process, else None."""
+        target = getattr(self.o, "process_on", "local") or "local"
+        self.project.update(processedOn=None)
+        if target == "local":
+            return None
+        from .remote_prep import RemotePrep, find_device
+
+        d = find_device(getattr(self, "devices", None), target)
+        if d is None:
+            self._log("the processing worker isn't on the network — preparing the dataset on this PC")
+            return None
+        if "process" not in d.capabilities:
+            self._log(f"{d.name} only trains — preparing the dataset on this PC")
+            return None
+        self._log(f"processing on {d.name}: video splitting, masks and camera solving run there")
+        self.project.update(processedOn=d.name)
+        return RemotePrep(self, d)
+
+    def _on_worker(self, what: str, fn, fallback=True):
+        """Run ``fn`` on the processing worker; a step it can't do (or, with ``fallback``, that fails there) runs
+        on this PC instead: returns False then."""
+        from .remote_prep import StepUnavailable
+
+        try:
+            fn()
+            return True
+        except Cancelled:
+            raise
+        except StepUnavailable as e:
+            self._log(f"{e} — {what} on this PC")
+            return False
+        except Exception as e:  # noqa: BLE001
+            if not fallback:
+                raise
+            self._log(f"{self.remote.name} couldn't run {what} ({getattr(e, 'message', None) or e}) — "
+                      f"{what} on this PC")
+            return False
+
     def _run(self) -> Optional[Path]:
+        self.remote = self._remote_prep()
+        try:
+            return self._run_stages()
+        finally:
+            if self.remote is not None:
+                self.remote.cleanup()
+
+    def _run_stages(self) -> Optional[Path]:
         o, ds = self.o, self.project.dataset_dir
         ds.mkdir(parents=True, exist_ok=True)
         self._register(ds)          # the server only exports into folders the app registered
+        remote = self.remote
+        video_remote = remote is not None and getattr(o, "video_on_worker", True)
         src = Path(o.source)
         has_priors = False
         imported = False
@@ -260,10 +319,11 @@ class LocalPipeline:
         elif o.source_kind == "homevideo":
             self._stage("Restoring home video")
             shutil.rmtree(ds / "masks", ignore_errors=True)
-            vid = self._register(self._video_folder(src))
             req = o.frames_request(src.name)
             req["outputDir"] = f"_frames_{uuid.uuid4().hex[:6]}"
-            self._process(vid, req, "home video", ds)
+            if not (video_remote and self._on_worker("restoring the home video", lambda: remote.frames(src, req, ds))):
+                vid = self._register(self._video_folder(src))
+                self._process(vid, req, "home video", ds)
             for line in importers.home_video_report(ds):
                 self._log(line)
             if (ds / "masks").is_dir():          # burnt-in date stamps: one more mask layer
@@ -274,12 +334,13 @@ class LocalPipeline:
         elif o.source_kind in ("video", "video360", "stereo"):
             self._stage("Extracting frames")
             shutil.rmtree(ds / "masks", ignore_errors=True)        # stacked masks of an earlier run
-            vid = self._register(self._video_folder(src))
             req = o.frames_request(src.name)
-            if o.source_kind == "stereo" and req["stereo"].get("rightVideo"):
-                self._video_folder(Path(o.stereo_right), req["stereo"]["rightVideo"])
             req["outputDir"] = f"_frames_{uuid.uuid4().hex[:6]}"
-            self._process(vid, req, "frames", ds)
+            if not (video_remote and self._on_worker("splitting the video", lambda: remote.frames(src, req, ds))):
+                vid = self._register(self._video_folder(src))
+                if o.source_kind == "stereo" and req["stereo"].get("rightVideo"):
+                    self._video_folder(Path(o.stereo_right), req["stereo"]["rightVideo"])
+                self._process(vid, req, "frames", ds)
             if o.source_kind == "stereo":
                 self._stereo_frames(ds)
             if (ds / "masks").is_dir():          # 360° nadir / rig masks: one more mask layer
@@ -344,11 +405,12 @@ class LocalPipeline:
                 if m == "none":
                     continue
                 self._stage(f"Masks ({m})")
-                dataset_id = self._register(ds)
                 req = o.mask_request(m, f"_masks_{uuid.uuid4().hex[:6]}")
                 dest = ds / "splatprep-masks" / m
                 shutil.rmtree(dest, ignore_errors=True)
-                self._process(dataset_id, req, f"masks {m}", dest)
+                if not (remote and self._on_worker(f"masks ({m})", lambda: remote.masks(req, dest))):
+                    shutil.rmtree(dest, ignore_errors=True)
+                    self._process(self._register(ds), req, f"masks {m}", dest)
                 layers.append(dest / "masks")
                 self._check()
             if o.mask_static:
@@ -371,13 +433,14 @@ class LocalPipeline:
             # 3. sky layer
             if o.sky:
                 self._stage("Finding the sky")
-                dataset_id = self._register(ds)
                 req = o.sky_request()
                 req["outputDir"] = f"_sky_{uuid.uuid4().hex[:6]}"
                 dest = ds / "splatprep-sky"
                 shutil.rmtree(dest, ignore_errors=True)
                 try:
-                    self._process(dataset_id, req, "sky", dest)
+                    if not (remote and self._on_worker("finding the sky", lambda: remote.masks(req, dest))):
+                        shutil.rmtree(dest, ignore_errors=True)
+                        self._process(self._register(ds), req, "sky", dest)
                     sky = importers.sky_layer(ds)
                     self._log(f"sky in {len(sky)} photos")
                 except PipelineError as e:
@@ -406,7 +469,8 @@ class LocalPipeline:
                     req["rig"] = srig
                 if stereo.rig_info(ds).get("lens") == "fisheye" and o.camera_model == "auto":
                     req["cameraModel"] = "fisheye"
-            self._process(dataset_id, req, "camera solve", ds)
+            if not (remote and self._on_worker("solving the cameras", lambda: remote.solve(req, ds), fallback=False)):
+                self._process(dataset_id, req, "camera solve", ds)
             if not (ds / "dataset.json").is_file():
                 raise PipelineError("camera solving produced no dataset.json")
             if o.source_kind == "stereo":

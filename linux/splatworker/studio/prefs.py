@@ -26,6 +26,7 @@ class StudioPrefs:
     receive_captures: bool = False      # net.receive (off until turned on: listens on every interface)
     require_pairing: bool = True        # net.pairing
     capture_port: int = 7879
+    prep_device: str = "local"          # "Process on" chosen last time ("local" or a worker's id), for new projects
 
     @classmethod
     def load(cls, path: Path) -> "StudioPrefs":

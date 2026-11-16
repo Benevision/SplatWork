@@ -32,6 +32,14 @@ Status: ✅ done · 🟡 partial (what is missing is said) · ⏳ not yet · ➖
   this app only: it passes a per-launch secret to the server it starts and sends it as `X-SplatWork-Local`;
   a loopback connection without it (SSH tunnel, `tailscale serve`, proxy) counts as remote. Remote clients
   can't see or use the app's folder datasets, and `export-local` only writes into registered folders.
+* **Process on (1.7.11, `studio/remote_prep.py`).** As the Mac's *Process on*: video splitting (and home video),
+  learned masks, the sky and the camera solve run on the chosen worker; photo import, 360° photos, stereo, fixed-region
+  masks and finalising stay here. The project's images go up once and stay on the worker (recorded in
+  `.remote-uploads.json`, which training on that worker also uses); a video is streamed up unchanged and its frames
+  become that copy (*Split videos on the worker*, `net.videoOnWorker`). Each step composes the stored images with only
+  the folders it reads and fetches only its output (`output.zip?skip=images` for masks). A missing model, or an error
+  splitting / masking, runs that step here; a camera solve that fails there fails the run. Not yet: the whole-pipeline
+  job (`POST /v1/pipeline`) the Mac uses when the same worker also trains.
 * **GPU sharing.** One training job per GPU at a time; processing jobs hold a GPU only during their GPU steps
   (1.7.6, `splatworker/gpulease.py`, PROTOCOL.md "GPU only for GPU steps"). Queued jobs are ordered by priority, then age: local
   Studio jobs are submitted with `priority: 1` (the person at the PC goes first) unless *Local jobs go first* is

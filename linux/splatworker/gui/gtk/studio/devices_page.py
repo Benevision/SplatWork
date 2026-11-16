@@ -181,6 +181,65 @@ class DevicesPage(Gtk.Box):
         dlg.present(self.window)
 
 
+# ============================================================================ New Project → Process on
+
+PREP_LOCAL_CAPTION = "Frames, masks and camera solving run on this PC."
+PREP_WORKER_CAPTION = ("Video splitting, masks and camera solving run on the worker; only what changed is sent back "
+                       "and forth. Steps it can't do run on this PC.")
+
+
+def process_on_choices(reg):
+    """("local", "This PC") and every known worker: "name", "name (can't process)", "name (offline)"."""
+    choices = [("local", "This PC")]
+    for d in reg.devices() if reg is not None else []:
+        if d.kind != "linux" and not d.online:
+            continue
+        if d.online:
+            label = d.name if "process" in d.capabilities else f"{d.name} (can't process)"
+        else:
+            label = f"{d.name} (offline)"
+        choices.append((d.id, label))
+    return choices
+
+
+def process_on_row(controller, options, on_change=None) -> Adw.ComboRow:
+    """"Process on": This PC or a worker (studio/remote_prep.py); the choice is remembered for new projects."""
+    reg = controller.devices
+    choices = process_on_choices(reg)
+    keys = [k for k, _ in choices]
+    if options.process_on == "local" and controller.prefs.prep_device in keys:
+        options.process_on = controller.prefs.prep_device          # the device chosen last time
+    if options.process_on not in keys:
+        options.process_on = "local"
+
+    def changed(v):
+        options.process_on = v
+        controller.prefs.prep_device = v
+        controller.save_prefs()
+        row.set_subtitle(PREP_LOCAL_CAPTION if v == "local" else PREP_WORKER_CAPTION)
+        if on_change:
+            on_change(v)
+    row = combo_row("Process on", choices, options.process_on, changed,
+                    subtitle=PREP_LOCAL_CAPTION if options.process_on == "local" else PREP_WORKER_CAPTION)
+    return row
+
+
+def missing_models_text(controller, options) -> str:
+    """"BensPC doesn't have SAM 2 or sky yet, so that step would run on this PC instead." ("" = nothing missing)."""
+    from ....studio.remote_prep import missing_models
+
+    if options.process_on in ("", "local") or controller.devices is None:
+        return ""
+    d = controller.devices.get(options.process_on)
+    if d is None or not d.online or "process" not in d.capabilities:
+        return ""
+    feats = options.features if options.source_kind not in ("colmap", "nerfstudio", "dataset") else None
+    miss = missing_models(d.info, options.mask_models, options.sky, feats)
+    if not miss:
+        return ""
+    return f"{d.name} doesn't have {' or '.join(miss)} yet, so that step would run on this PC instead."
+
+
 # ============================================================================ New Project → Train on
 
 def train_on_row(controller, options) -> Adw.ComboRow:

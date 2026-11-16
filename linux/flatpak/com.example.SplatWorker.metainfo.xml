@@ -81,6 +81,14 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.11" date="2026-11-16">
+      <description>
+        <p>Prepare projects on another worker.</p>
+        <ul>
+          <li>New Project → Process on: video splitting, masks and camera solving can run on another SplatWork worker. The photos go up once, and steps that worker can't do run on this PC.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.10" date="2026-11-16">
       <description>
         <p>Video decoding on the NVIDIA GPU's video decoder.</p>

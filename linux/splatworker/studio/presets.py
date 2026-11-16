@@ -133,6 +133,8 @@ class ProjectOptions:
     train_overrides: Dict[str, Any] = field(default_factory=dict)
     auto_train: bool = True
     train_on: str = "local"                  # net.placement: "local" (this PC) | "all" (block-parallel) | device id
+    process_on: str = "local"                # "Process on": "local" (this PC) | a worker's device id (remote_prep.py)
+    video_on_worker: bool = True             # net.videoOnWorker: a video goes up as it is and is split on the worker
     split_above: int = 400                   # net.blockThreshold: "all" splits scenes with this many photos or more
     home_frames: int = 400                   # source.homeVideoFrames: frames over all clips (home video)
     home_clips: str = ""                     # home video: clip numbers to use ("2, 5"; empty = the best clip)
