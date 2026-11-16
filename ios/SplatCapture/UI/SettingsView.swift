@@ -89,7 +89,7 @@ struct SettingsView: View {
                         }
                         .disabled(app.capture.highResolutionStills)
                     }
-                    Explained("Takes a full-resolution photo for every keyframe instead of using the video frame (e.g. 12 MP vs 2.7 MP). Much sharper, but slower (≈1–2 keyframes/s), much larger captures, and depth may be sampled a few ms apart from the photo. Overrides the video format. Default: Off.") {
+                    Explained("Takes a full-resolution photo for every keyframe instead of using the video frame (e.g. 12 MP vs 2.7 MP). Much sharper, but slower (≈1–2 keyframes/s), much larger captures, and depth may be sampled a few ms apart from the photo. Overrides the video format. In tests the stills were far less blurred than video frames. Default: On.") {
                         Toggle("High-resolution stills", isOn: s.highResolutionStills)
                     }
                     Explained("JPEG is universally compatible. HEIC is ~40% smaller at the same quality; SplatWork reads both. Default: JPEG.") {
@@ -103,14 +103,17 @@ struct SettingsView: View {
                     Explained("Freeze exposure and white balance when recording starts, so colours stay consistent between frames (splats hate flickering brightness). Turn off if you walk between very bright and dark areas. Default: On.") {
                         Toggle("Lock exposure & white balance", isOn: s.lockExposureWhileRecording)
                     }
-                    Explained("Fastest shutter to use when exposure locks; ISO rises to keep the brightness. Motion blur ruins splats (and blurry frames get skipped, leaving gaps), while sensor noise is random in every frame and averages out across views — so faster is usually better. At walking pace 1/60 s smears about 11 px, 1/250 s about 3 px. In very dim rooms the camera may hit its ISO limit and frames get darker. Default: 1/250 s.") {
+                    Explained("Slowest shutter the camera may use, in both modes and whether or not exposure locks; ISO rises to keep the brightness. Motion blur ruins splats (and blurry frames get skipped, leaving gaps), while sensor noise is random in every frame and averages out across views — so faster is usually better. At walking pace 1/60 s smears about 11 px, 1/250 s about 3 px. In very dim rooms the camera may hit its ISO limit and frames get darker. Default: 1/250 s.") {
                         Picker("Shutter limit", selection: s.maxShutterSeconds) {
                             Text("Auto").tag(0.0)
                             Text("1/120 s").tag(1.0 / 120)
                             Text("1/250 s").tag(1.0 / 250)
                             Text("1/500 s").tag(1.0 / 500)
+                            Text("1/1000 s").tag(1.0 / 1000)
                         }
-                        .disabled(!s.lockExposureWhileRecording.wrappedValue)
+                    }
+                    Explained("Turns the iPhone's light on while recording, in both modes. In dim rooms it lets the camera keep a fast shutter without running out of ISO (dark, noisy frames). It only reaches a few metres and lights the scene from the phone, so surfaces close by look brighter in some frames than others. Default: Off.") {
+                        Toggle("Torch while recording", isOn: s.torchWhileRecording)
                     }
                     Explained("Lets the camera refocus continuously. Off fixes focus (and thus intrinsics) — only useful when the subject distance stays constant. Default: On.") {
                         Toggle("Autofocus", isOn: s.autoFocus)

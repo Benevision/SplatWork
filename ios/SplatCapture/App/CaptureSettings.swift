@@ -61,7 +61,8 @@ struct CaptureSettings: Codable, Sendable, Equatable {
 
     /// `VideoFormatOption.id`; nil = ARKit default.
     var videoFormatID: String? = nil
-    var highResolutionStills: Bool = false
+    /// A full-resolution photo per keyframe (photo pipeline: much less motion blur than the video stream in tests).
+    var highResolutionStills: Bool = true
     var imageFormat: ImageFileFormat = .jpeg
     var imageQuality: Double = 0.9
 
@@ -96,6 +97,8 @@ struct CaptureSettings: Codable, Sendable, Equatable {
     var stereoInterval: Double = 0.8
     /// Stereo mode: also record the dual camera's own depth map with each pair, where the phone supports it.
     var stereoDepth: Bool = true
+    /// Both modes: turn the torch on while recording (dim scenes: a fast shutter without maxing out ISO).
+    var torchWhileRecording: Bool = false
 }
 
 extension CaptureSettings {

@@ -16,6 +16,7 @@
 		19604350768953FEE29548EA /* ARCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1967B5E415C2458998D042F3 /* ARCaptureView.swift */; };
 		2542C135BCA8426BBC647CE7 /* TrainKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A674FF21ED6DB0A0A24A1AE2 /* TrainKit.swift */; };
 		286D81C329180C0711754412 /* ZipReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B4A75A95EBB6C42023D39CE /* ZipReader.swift */; };
+		28EE5BB1A7FD3D5EFEB3169C /* CameraLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF675DC78CE6B17C6D2D351 /* CameraLimits.swift */; };
 		299B4D8EE2C8DF9B1BCEC1CE /* CaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF41F58A2BB1AA8A56C19F27 /* CaptureStore.swift */; };
 		2BFD4E2555DEE7CE5CB7B4BF /* PhotoLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77ADE0588FE32C0299F98B66 /* PhotoLocation.swift */; };
 		3AD4ABCD1EFF242A29175670 /* CommonShaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = C77BC5C83B6155013ADD0900 /* CommonShaders.swift */; };
@@ -120,6 +121,7 @@
 		3C28CE971B1AD74C2DB12576 /* Equirect360.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Equirect360.swift; sourceTree = "<group>"; };
 		3FC1A0B353FEE57A6947C3A0 /* PhotoIngest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoIngest.swift; sourceTree = "<group>"; };
 		4754FAF3FE754B14931580F5 /* SplatCaptureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatCaptureApp.swift; sourceTree = "<group>"; };
+		4AF675DC78CE6B17C6D2D351 /* CameraLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraLimits.swift; sourceTree = "<group>"; };
 		518274B16DD673B16FBD5FE6 /* libSplatTrainKit.a */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = archive.ar; path = libSplatTrainKit.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A5379555B5C140B256FFEB9 /* WorkerBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerBrowser.swift; sourceTree = "<group>"; };
 		5C3A14775FE5D559DB0555C3 /* StereoCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StereoCaptureView.swift; sourceTree = "<group>"; };
@@ -421,6 +423,7 @@
 		EF3B22579E99F849A97766DE /* Capture */ = {
 			isa = PBXGroup;
 			children = (
+				4AF675DC78CE6B17C6D2D351 /* CameraLimits.swift */,
 				E82E0A0E82B4AB3D759285D4 /* CaptureEngine.swift */,
 				C27751E67941D1E997EF6BF0 /* CaptureMath.swift */,
 				E538DAE29038A250B48D672D /* CaptureRecorder.swift */,
@@ -578,6 +581,7 @@
 			files = (
 				19604350768953FEE29548EA /* ARCaptureView.swift in Sources */,
 				E3F0BF3F7E044D83DBF53167 /* AppSettings.swift in Sources */,
+				28EE5BB1A7FD3D5EFEB3169C /* CameraLimits.swift in Sources */,
 				47773DE0AFB8030284C22FD8 /* CaptureEngine.swift in Sources */,
 				C49115AE873BE5BF1C6C5146 /* CaptureLibrary.swift in Sources */,
 				4D7FDF4BB7998684197D9D6B /* CaptureMath.swift in Sources */,

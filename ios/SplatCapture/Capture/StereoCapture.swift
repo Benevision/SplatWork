@@ -123,6 +123,7 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
         queue.async { [self] in
             do {
                 if !configured { try configure(wantDepth: settings.stereoDepth) }
+                applyCamera(settings, recording: false)
                 if !session.isRunning { session.startRunning() }
             } catch {
                 onError?(error.localizedDescription)
@@ -233,6 +234,17 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
         if fallbacks == 1 { onError?("This iPhone can't stream stereo depth while taking photos from both cameras, so pairs are recorded without the depth map.") }
     }
 
+    /// Shutter cap (whole session) and torch (while recording). The photos follow the video auto-exposure, which
+    /// picked 1/33 s indoors without a cap.
+    private func applyCamera(_ settings: CaptureSettings, recording: Bool) {
+        guard let dev = device, (try? dev.lockForConfiguration()) != nil else { return }
+        CameraLimits.capShutter(dev, seconds: settings.maxShutterSeconds)
+        CameraLimits.torch(dev, on: recording && settings.torchWhileRecording)
+        dev.unlockForConfiguration()
+        log(String(format: "shutter cap %@, torch %@", settings.maxShutterSeconds > 0 ? "1/\(Int((1 / settings.maxShutterSeconds).rounded())) s" : "auto",
+                   recording && settings.torchWhileRecording ? "on" : "off"))
+    }
+
     // MARK: Recording
 
     func startRecording(settings: CaptureSettings, completion: @escaping @Sendable (Result<Void, any Error>) -> Void) {
@@ -240,6 +252,7 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
             do {
                 if !configured { try configure(wantDepth: settings.stereoDepth) }
                 if !session.isRunning { session.startRunning() }
+                applyCamera(settings, recording: true)
                 let (url, name) = CaptureStore.uniqueURL(for: CaptureStore.defaultName())
                 recording = try Recording(directory: url, name: name, gdc: gdc, settings: settings)
                 inFlight = 0
@@ -259,6 +272,7 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
     func stopRecording(completion: @escaping @Sendable (Result<CaptureSummary, any Error>) -> Void) {
         queue.async { [self] in
             timer?.cancel(); timer = nil
+            if let s = recording?.settings { applyCamera(s, recording: false) }
             guard let rec = recording else { completion(.failure(StereoCaptureError.noPairs)); return }
             // Let photos still in flight arrive (up to ~3 s), then write the manifest.
             @Sendable func finish(_ tries: Int) {

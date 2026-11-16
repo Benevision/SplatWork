@@ -6,6 +6,14 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork Capture: sharper frames.** The shutter limit (default 1/250 s; now also 1/1000 s) caps the camera's
+  auto-exposure for the whole session, in both modes, with ISO rising instead. Before, it was applied once when
+  exposure locked: ARKit could undo it (a capture ran at 1/91 s, ISO 50), and Stereo mode had no limit at all
+  (1/33–1/50 s indoors). New *Torch while recording* for dim rooms. *High-resolution stills* is now on by default
+  for new installs: in a side-by-side test they were far less blurred than video frames. Stereo mode falls back
+  without the depth stream on iPhones that can't stream depth while taking photos from both cameras (they stopped
+  the camera: a frozen preview).
+
 - **SplatWork Capture: Stereo mode (new, not yet tried on a phone).** A *LiDAR / Stereo* switch on the camera screen.
   Stereo takes photo pairs from the wide and ultra-wide cameras at once (iPhone 11 or newer), each with the lenses'
   factory calibration and, where the phone supports it, the dual camera's depth map. SplatWork on the Mac solves the

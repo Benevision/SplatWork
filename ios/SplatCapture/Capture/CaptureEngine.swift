@@ -151,6 +151,26 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
             self.selector.settings = settings
         }
         session.run(config, options: reset ? [.resetTracking, .removeExistingAnchors] : [])
+        applyShutterCap(settings)
+        // ARKit may set up the camera again once the session runs: apply the cap again shortly after
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.applyShutterCap(settings) }
+    }
+
+    /// The shutter cap holds for the whole session (not only once exposure locks).
+    @MainActor
+    private func applyShutterCap(_ settings: CaptureSettings) {
+        guard let device = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera,
+              (try? device.lockForConfiguration()) != nil else { return }
+        CameraLimits.capShutter(device, seconds: settings.maxShutterSeconds)
+        device.unlockForConfiguration()
+    }
+
+    @MainActor
+    private func setTorch(_ on: Bool) {
+        guard let device = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera,
+              (try? device.lockForConfiguration()) != nil else { return }
+        CameraLimits.torch(device, on: on)
+        device.unlockForConfiguration()
     }
 
     @MainActor
@@ -167,6 +187,8 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
         let r = try CaptureRecorder(directory: url, name: name, settings: settings,
                                     hasLiDAR: hasDepth, largeFrames: large)
         r.onPoints = onPoints
+        applyShutterCap(settings)
+        if settings.torchWhileRecording { setTorch(true) }
         if settings.lockExposureWhileRecording { setExposureLocked(true) }
         delegateQueue.async { [self] in
             self.settings = settings
@@ -183,6 +205,7 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
     @MainActor
     func stopRecording(completion: @escaping @Sendable (Result<CaptureSummary, any Error>) -> Void) {
         setExposureLocked(false)
+        setTorch(false)
         delegateQueue.async { [self] in
             guard let r = recorder else {
                 completion(.failure(CaptureError.noFrames))
@@ -196,6 +219,7 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
     @MainActor
     func discardRecording() {
         setExposureLocked(false)
+        setTorch(false)
         delegateQueue.async { [self] in
             recorder?.discard()
             recorder = nil
