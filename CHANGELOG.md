@@ -13,10 +13,11 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
   that finishes while another project is training waits as *Ready to train*. One finishing in the background no
   longer closes the window you're working in.
 
-- **SplatWork Capture: sharper frames.** The shutter limit (default 1/250 s; now also 1/1000 s) caps the camera's
-  auto-exposure for the whole session, in both modes, with ISO rising instead. Before, it was applied once when
-  exposure locked: ARKit could undo it (a capture ran at 1/91 s, ISO 50), and Stereo mode had no limit at all
-  (1/33–1/50 s indoors). New *Torch while recording* for dim rooms. *High-resolution stills* is now on by default
+- **SplatWork Capture: sharper frames.** The shutter limit (default 1/250 s; now also 1/1000 s) is enforced by the
+  app in both modes: a few times a second it sets the shutter itself, never slower than the limit, and steers ISO
+  by the camera's metering. A locked recording holds the last values. Before, the limit was applied once when
+  exposure locked, and ARKit undid it (captures at 1/91–1/100 s). The camera's built-in limit was ignored too, and
+  Stereo mode had none at all (1/33–1/50 s indoors). Both modes log the applied exposure to the Xcode console. New *Torch while recording* for dim rooms. *High-resolution stills* is now on by default
   for new installs: in a side-by-side test they were far less blurred than video frames. Stereo mode falls back
   without the depth stream on iPhones that can't stream depth while taking photos from both cameras (they stopped
   the camera: a frozen preview).

@@ -152,9 +152,15 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
         }
         session.run(config, options: reset ? [.resetTracking, .removeExistingAnchors] : [])
         applyShutterCap(settings)
-        // ARKit may set up the camera again once the session runs: apply the cap again shortly after
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.applyShutterCap(settings) }
+        // ARKit sets the camera up once the session runs: start steering exposure shortly after
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, let d = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera else { return }
+            self.exposure.start(d, seconds: settings.maxShutterSeconds)
+        }
     }
+
+    /// Shutter limit, applied by the app (ARKit ignored the camera's own limit: frames at 1/100 s).
+    private let exposure = CappedExposure(queue: .main, log: { print("[SplatWork Capture] \($0)") })
 
     /// The shutter cap holds for the whole session (not only once exposure locks).
     @MainActor
@@ -174,7 +180,7 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
     }
 
     @MainActor
-    func pause() { session.pause() }
+    func pause() { exposure.stop(); session.pause() }
 
     /// Creates a new capture bundle and starts saving keyframes into it.
     @MainActor
@@ -232,7 +238,11 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
-            if locked {
+            if locked, settings.maxShutterSeconds > 0, device.isExposureModeSupported(.custom) {
+                // the capped exposure loop holds its current shutter and ISO (already within the limit)
+                exposure.freeze(true)
+                if device.isWhiteBalanceModeSupported(.locked) { device.whiteBalanceMode = .locked }
+            } else if locked {
                 // Cap the shutter (default 1/120 s) before locking: auto-exposure picks ~1/60 s indoors, which
                 // blurs most frames while walking. Raise ISO to keep the same brightness (a bit more grain).
                 let cap = settings.maxShutterSeconds
@@ -246,7 +256,8 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
                 } else if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
                 if device.isWhiteBalanceModeSupported(.locked) { device.whiteBalanceMode = .locked }
             } else {
-                if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+                exposure.freeze(false)
+                if settings.maxShutterSeconds <= 0, device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
                 if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { device.whiteBalanceMode = .continuousAutoWhiteBalance }
             }
         } catch {

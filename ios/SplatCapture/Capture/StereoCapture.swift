@@ -98,6 +98,7 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
     private var calibrationEnabled = false
     private var gdc = true
     private var observers: [NSObjectProtocol] = []
+    private lazy var exposure = CappedExposure(queue: queue, log: { print("[SplatWork Stereo] \($0)") })
     private var fallbacks = 0
     private var zoomed = false
 
@@ -134,6 +135,7 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
     func stop() {
         queue.async { [self] in
             guard recording == nil else { return }
+            exposure.stop()
             if session.isRunning { session.stopRunning() }
         }
     }
@@ -241,6 +243,8 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
         CameraLimits.capShutter(dev, seconds: settings.maxShutterSeconds)
         CameraLimits.torch(dev, on: recording && settings.torchWhileRecording)
         dev.unlockForConfiguration()
+        // the photo pipeline ignored the camera's own limit (pairs at 1/33 s): the app steers exposure itself
+        if !recording { exposure.start(dev, seconds: settings.maxShutterSeconds) }
         log(String(format: "shutter cap %@, torch %@", settings.maxShutterSeconds > 0 ? "1/\(Int((1 / settings.maxShutterSeconds).rounded())) s" : "auto",
                    recording && settings.torchWhileRecording ? "on" : "off"))
     }
