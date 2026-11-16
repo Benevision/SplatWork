@@ -105,6 +105,7 @@ targets:
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/PhotoIngest.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/PhotoLocation.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/VideoFrames.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Sources/HomeVideo.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/Equirect360.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/StereoSources.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/StereoDepth.swift
@@ -112,6 +113,7 @@ targets:
       - path: ../mac/Sources/SplatStudio/Formats/CompressedPLY.swift
       # Offloading: discover Linux workers / Macs (_splatworker._tcp) and train on them, whole or in blocks.
       - path: ../mac/Sources/SplatStudio/Remote/WorkerClient.swift
+      - path: ../mac/Sources/SplatStudio/Remote/UploadBatches.swift
       - path: ../mac/Sources/SplatStudio/Remote/WorkerBrowser.swift
       - path: ../mac/Sources/SplatStudio/Remote/ComputeScheduler.swift
       - path: ../mac/Sources/SplatStudio/Remote/BlockTraining.swift

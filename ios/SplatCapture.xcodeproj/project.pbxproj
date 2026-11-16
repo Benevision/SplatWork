@@ -23,6 +23,7 @@
 		3FB2A71289BD05C802B36DE9 /* SystemBenchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97733CDC8C43C26BFCEC1D26 /* SystemBenchmark.swift */; };
 		433E875D28817FCB93763B10 /* RemoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C242A34EDAED12F30A2E85D0 /* RemoteStore.swift */; };
 		443E4924AEF0A9763B82BE47 /* libSplatTrainKit.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 518274B16DD673B16FBD5FE6 /* libSplatTrainKit.a */; };
+		4541712E5B87700B6FF29083 /* HomeVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38CCC7EEB67919FE948B8C4D /* HomeVideo.swift */; };
 		47773DE0AFB8030284C22FD8 /* CaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E82E0A0E82B4AB3D759285D4 /* CaptureEngine.swift */; };
 		4D7FDF4BB7998684197D9D6B /* CaptureMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = C27751E67941D1E997EF6BF0 /* CaptureMath.swift */; };
 		4E4CAE3563DA54A1683ECF88 /* KeyframeSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4ED171959AEA0BD153F5C17 /* KeyframeSelector.swift */; };
@@ -54,6 +55,7 @@
 		A988BB74A895A97D7E0D533F /* MiniMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20C3E7A4204426419D0315C5 /* MiniMapView.swift */; };
 		AA685982625799DBF95386FA /* MetalTrainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB75762CC6A47897F47538C /* MetalTrainer.swift */; };
 		AEE69BD7A99381990F836E8D /* MetalContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5ED7C3D6A56E0E5F5D87C4D /* MetalContext.swift */; };
+		AF3FC4361C08A16E75C5E615 /* UploadBatches.swift in Sources */ = {isa = PBXBuildFile; fileRef = C663A4C8451256A897807929 /* UploadBatches.swift */; };
 		B2B74E577DA08B698F899880 /* TrainingConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38A6A70AD3BBA9693569029C /* TrainingConfig.swift */; };
 		B2F023C8F8C056CE9E6BFE37 /* TrainSkybox.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B9E09F423E7199F7CD8D2D /* TrainSkybox.swift */; };
 		BA322DD40B5797362AF2EA9F /* ImageRemapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72840BEB6FA86C73DAEDF7EA /* ImageRemapper.swift */; };
@@ -111,6 +113,7 @@
 		2E1C709A52DA7044AAD4151C /* SplatViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatViewer.swift; sourceTree = "<group>"; };
 		331362718FD1B1A67C345601 /* VideoFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoFrames.swift; sourceTree = "<group>"; };
 		38A6A70AD3BBA9693569029C /* TrainingConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingConfig.swift; sourceTree = "<group>"; };
+		38CCC7EEB67919FE948B8C4D /* HomeVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeVideo.swift; sourceTree = "<group>"; };
 		3BCE07DBA512D60AEF8DCB76 /* PoseCommon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseCommon.swift; sourceTree = "<group>"; };
 		3C28CE971B1AD74C2DB12576 /* Equirect360.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Equirect360.swift; sourceTree = "<group>"; };
 		3FC1A0B353FEE57A6947C3A0 /* PhotoIngest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoIngest.swift; sourceTree = "<group>"; };
@@ -152,6 +155,7 @@
 		C242A34EDAED12F30A2E85D0 /* RemoteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteStore.swift; sourceTree = "<group>"; };
 		C2646E8D676FB956F189F424 /* StereoSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StereoSources.swift; sourceTree = "<group>"; };
 		C27751E67941D1E997EF6BF0 /* CaptureMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMath.swift; sourceTree = "<group>"; };
+		C663A4C8451256A897807929 /* UploadBatches.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadBatches.swift; sourceTree = "<group>"; };
 		C6C42AF3DDA458931753874A /* Manifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Manifest.swift; sourceTree = "<group>"; };
 		C77BC5C83B6155013ADD0900 /* CommonShaders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommonShaders.swift; sourceTree = "<group>"; };
 		D1D26A5605AA78C49A521B57 /* AutoClean.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoClean.swift; sourceTree = "<group>"; };
@@ -247,6 +251,7 @@
 				62E6687CD9FC6A23AB70B55A /* PauseController.swift */,
 				C242A34EDAED12F30A2E85D0 /* RemoteStore.swift */,
 				97733CDC8C43C26BFCEC1D26 /* SystemBenchmark.swift */,
+				C663A4C8451256A897807929 /* UploadBatches.swift */,
 				5A5379555B5C140B256FFEB9 /* WorkerBrowser.swift */,
 				BFC4F7687C386E8AA77F8BCF /* WorkerClient.swift */,
 			);
@@ -367,6 +372,7 @@
 			isa = PBXGroup;
 			children = (
 				3C28CE971B1AD74C2DB12576 /* Equirect360.swift */,
+				38CCC7EEB67919FE948B8C4D /* HomeVideo.swift */,
 				3FC1A0B353FEE57A6947C3A0 /* PhotoIngest.swift */,
 				77ADE0588FE32C0299F98B66 /* PhotoLocation.swift */,
 				D32202F0594CCEDC23FC7894 /* StereoDepth.swift */,
@@ -609,6 +615,7 @@
 				C438086DFC89740F4DAA1085 /* DatasetWriting.swift in Sources */,
 				9174D2FF7A8E7400FDAAB5BE /* Equirect360.swift in Sources */,
 				E8E23BC6722983C55018FF74 /* GaussianCloud.swift in Sources */,
+				4541712E5B87700B6FF29083 /* HomeVideo.swift in Sources */,
 				BA322DD40B5797362AF2EA9F /* ImageRemapper.swift in Sources */,
 				A7D15765859FEE849F7D263F /* MacShims.swift in Sources */,
 				EE5FC9313B3F69C45A0A6859 /* Masking.swift in Sources */,
@@ -639,6 +646,7 @@
 				B2F023C8F8C056CE9E6BFE37 /* TrainSkybox.swift in Sources */,
 				B2B74E577DA08B698F899880 /* TrainingConfig.swift in Sources */,
 				172AF28DCB37B4E80029D195 /* TrainingData.swift in Sources */,
+				AF3FC4361C08A16E75C5E615 /* UploadBatches.swift in Sources */,
 				C44258C665C68DC392A7AA20 /* VideoFrames.swift in Sources */,
 				8E714E2DB79AB3C41D8AADAC /* ViewerCamera.swift in Sources */,
 				7ED0E89FD92D438BDB62CED1 /* WorkerBrowser.swift in Sources */,

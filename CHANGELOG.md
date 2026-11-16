@@ -6,6 +6,10 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork Capture builds again.** Two files the shared code started using in 1.3.0 (home-video analysis and the
+  batched uploads) weren't in the iPhone project, so building it failed with "Cannot find 'HomeVideoAnalysis' in
+  scope".
+
 ## 1.3.0 — 2026-11-16
 
 SplatWork 1.3.0 for Mac, SplatWork for Linux 1.7.10, and the first SplatWork for Windows. SplatWork Capture is

@@ -101,6 +101,7 @@ struct HomeVideoAnalysis: Codable, Hashable, Sendable {
     }
 }
 
+#if os(macOS)   // the iPhone app only reads vhs.json (HomeVideoAnalysis); extraction runs on the Mac / worker
 enum HomeVideoIngest {
     /// Analyses are kept per video (path, size, date) so the sheet's clip list and the project's frame step decode the
     /// file once.
@@ -189,3 +190,4 @@ enum HomeVideoIngest {
         return ["vhs", "hi8", "video8", "betamax", "camcorder", "home video", "homevideo"].contains { n.contains($0) }
     }
 }
+#endif
