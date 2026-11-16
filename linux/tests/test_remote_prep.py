@@ -126,3 +126,59 @@ def test_choices_and_slots():
     assert on.slots == 2                                          # the 610M counts from 1.7.8
     on.info["workerVersion"] = "1.7.7"
     assert on.slots == 1
+
+
+# ------------------------------------------------------------- the whole pipeline as one job
+
+def test_same_worker_runs_the_whole_pipeline(tmp_path, workers):  # noqa: F811
+    from test_pipeline import PipelineFake
+
+    from splatworker.studio import formats
+
+    lport, lback, _ = workers("local", local=True)
+    rport, rback, _ = workers("remote", backend=PipelineFake(), token="r")
+    reg = D.DeviceRegistry(tmp_path / "devices.json")
+    dev = reg.add_manual("127.0.0.1", rport, token="r")
+    assert "pipeline" in dev.capabilities and "frames" in dev.capabilities
+    video = tmp_path / "walk.mp4"
+    video.write_bytes(b"\x00fake video" * 100)
+    opts = ProjectOptions(name="Walk", source_kind="video", source=str(video), preset="preview", sky=False,
+                          process_on=dev.id, train_on=dev.id)
+    proj = Project.create(tmp_path / "projects", "Walk", opts.to_dict())
+    p, events = pipeline(lport, proj, opts, reg)
+    p.run()
+    failed = [d for k, d in events if k == "failed"]
+    assert not failed, failed
+    done = [d for k, d in events if k == "done"]
+    out = done[-1]["output"]
+    assert out is not None and Path(out).is_file() and formats.load(out).count > 0
+    log = (proj.root / "prep.log").read_text()
+    assert f"whole pipeline on {dev.name}" in log and "downloading the prepared dataset" in log
+    assert rback.tasks[:1] == ["frames"] and "sfm" in rback.tasks
+    assert not [c for c in lback.contexts]                                  # nothing ran on this PC's server
+    ds = proj.dataset_dir
+    doc = json.loads((ds / "dataset.json").read_text())
+    assert all((ds / c["image"]).is_file() for c in doc["cameras"])       # the worker's frames came back
+    assert not (ds / ".pipeline").exists()
+    meta = json.loads((proj.root / "project.json").read_text())
+    assert meta.get("pipelineJob") is None and meta["datasetStats"]["cameras"] == len(doc["cameras"])
+    stages = [d["title"] for k, d in events if k == "stage"]
+    assert stages[0] == "Extracting frames" and "Solving cameras" in stages and stages[-1] == "Training"
+
+
+def test_pipeline_eligibility():
+    dev = D.Device(id="a", name="BensPC", host="h", port=1, status="online",
+                   info={"capabilities": ["train", "process", "pipeline"], "models": ["superpoint_lightglue", "sky",
+                                                                                       "person", "sam2_auto"]})
+    o = ProjectOptions(name="x", source_kind="video", source="v.mp4", process_on="a", train_on="a")
+    assert remote_prep.pipeline_ineligible(o, dev, True) is None
+    assert remote_prep.pipeline_ineligible(o, dev, False) == "training runs elsewhere"
+    o2 = ProjectOptions(name="x", source_kind="video", source="v.mp4", process_on="a", train_on="local")
+    assert remote_prep.pipeline_ineligible(o2, dev, True) == "training runs elsewhere"
+    o3 = ProjectOptions(name="x", source_kind="video", source="v.mp4", process_on="a", train_on="a",
+                        mask_models=["person", "sam2_auto"])
+    assert "stacks several" in remote_prep.pipeline_ineligible(o3, dev, True)
+    o4 = ProjectOptions(name="x", source_kind="homevideo", source="v.mp4", process_on="a", train_on="a")
+    assert "step by step" in remote_prep.pipeline_ineligible(o4, dev, True)
+    old = D.Device(id="a", name="Old", host="h", port=1, status="online", info={"capabilities": ["train", "process"]})
+    assert "1.6 or newer" in remote_prep.pipeline_ineligible(o, old, True)

@@ -125,7 +125,10 @@ class ComputeRun:
         self.reg = registry
         self.cfg = config
         self.ds: Path = pipeline.project.dataset_dir
-        self.doc = json.loads((self.ds / "dataset.json").read_text(encoding="utf-8"))
+        try:     # a whole-pipeline job (remote_prep.py) follows its job before any dataset.json exists here
+            self.doc = json.loads((self.ds / "dataset.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self.doc = {}
         self.cams = [c for c in self.doc.get("cameras") or []]
         self.cancel = pipeline.cancel_event
         self._upload_lock: Dict[str, threading.Lock] = {}

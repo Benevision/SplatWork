@@ -81,6 +81,14 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.12" date="2026-11-16">
+      <description>
+        <p>When one worker prepares and trains a project, the whole run is a single job there.</p>
+        <ul>
+          <li>The photos or the video go up once; the worker prepares the dataset and trains by itself while this PC may be offline, then the dataset and the result come back.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.11" date="2026-11-16">
       <description>
         <p>Prepare projects on another worker.</p>

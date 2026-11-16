@@ -266,6 +266,46 @@ class LocalPipeline:
         self.project.update(processedOn=d.name)
         return RemotePrep(self, d)
 
+    def _whole_pipeline(self) -> Optional[Path]:
+        """Processing and training on one worker as a single job there (remote_prep.py), as the Mac does; None =
+        not possible, run step by step. A job of an earlier attempt with the same settings is followed again."""
+        from .remote_prep import options_fingerprint, pipeline_ineligible
+
+        r, o = self.remote, self.o
+        rec = self.project.meta.get("pipelineJob")
+        if isinstance(rec, dict) and rec.get("device") == r.d.id and rec.get("options") == options_fingerprint(o):
+            try:
+                r.client.job(rec["jobId"])
+                self._log(f"following the pipeline job {rec['jobId']} on {r.name} again")
+                return r.follow_pipeline(rec["jobId"], bool(rec.get("videoOnWorker")))
+            except ApiError as e:
+                if e.status != 404:
+                    raise
+                self.project.update(pipelineJob=None)
+        why = pipeline_ineligible(o, r.d, self.train_enabled)
+        if why is not None:
+            if why != "training runs elsewhere":
+                self._log(f"step by step with {r.name}: {why}")
+            return None
+        self.project.dataset_dir.mkdir(parents=True, exist_ok=True)
+        src = Path(o.source)
+        video = o.source_kind in ("video", "video360") and getattr(o, "video_on_worker", True) \
+            and "frames" in r.caps
+        if video:
+            self._stage("Extracting frames")
+            req = o.frames_request(src.name)
+            req["outputDir"] = "_frames"
+            job = r.start_pipeline(src, req, False)
+        else:
+            saved, self.remote = self.remote, None          # stage 1 here (no per-step video split)
+            try:
+                self._register(self.project.dataset_dir)
+                has_priors, _ = self._ingest()
+            finally:
+                self.remote = saved
+            job = r.start_pipeline(None, None, has_priors and (self.project.dataset_dir / "priors.json").is_file())
+        return r.follow_pipeline(job, video)
+
     def _on_worker(self, what: str, fn, fallback=True):
         """Run ``fn`` on the processing worker; a step it can't do (or, with ``fallback``, that fails there) runs
         on this PC instead: returns False then."""
@@ -289,21 +329,23 @@ class LocalPipeline:
     def _run(self) -> Optional[Path]:
         self.remote = self._remote_prep()
         try:
+            if self.remote is not None:
+                out = self._whole_pipeline()
+                if out is not None:
+                    return out
             return self._run_stages()
         finally:
             if self.remote is not None:
                 self.remote.cleanup()
 
-    def _run_stages(self) -> Optional[Path]:
+    def _ingest(self):
+        """Stage 1: the source → images/ (or a finished dataset.json). Returns (has_priors, imported)."""
         o, ds = self.o, self.project.dataset_dir
-        ds.mkdir(parents=True, exist_ok=True)
-        self._register(ds)          # the server only exports into folders the app registered
         remote = self.remote
         video_remote = remote is not None and getattr(o, "video_on_worker", True)
         src = Path(o.source)
         has_priors = False
         imported = False
-
         # 1. source → images (or a finished dataset.json)
         if o.source_kind == "stereo" and src.is_dir():           # a folder of SBS / over-under stereo photos
             self._stage("Extracting frames")
@@ -388,6 +430,14 @@ class LocalPipeline:
                 self._titles[self._titles.index("Importing cameras") + 1:1] = ["Solving cameras"]
         else:
             raise PipelineError(f"unknown source {o.source_kind}")
+        return has_priors, imported
+
+    def _run_stages(self) -> Optional[Path]:
+        o, ds = self.o, self.project.dataset_dir
+        ds.mkdir(parents=True, exist_ok=True)
+        self._register(ds)          # the server only exports into folders the app registered
+        remote = self.remote
+        has_priors, imported = self._ingest()
         self._check()
 
         masks: Dict[str, str] = {}

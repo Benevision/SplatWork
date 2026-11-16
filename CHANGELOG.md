@@ -6,6 +6,13 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.12 — the whole run as one job on the worker:** when a project's processing and its
+  training go to the same worker, the Studio now does what the Mac does: the photos (or the video) and every
+  setting go up once, and that worker runs frame extraction, masks, the sky, the camera solve and training on its
+  own. This PC can go offline meanwhile, for up to a day. When training starts there it fetches the prepared
+  dataset, then the previews and the result. *Prepare again* with the same settings picks the running job up
+  again instead of starting over. When that isn't possible (several stacked mask models, a home video, a worker
+  older than 1.6, a missing model), the log says why and the steps run one by one as in 1.7.11.
 - **SplatWork for Linux 1.7.11 — Process on another worker, as on the Mac:** *New Project → Processing device →
   Process on* offers *This PC* or any worker. Workers that can't process or are offline are marked, and the choice is
   remembered. Video splitting, masks, the sky and camera solving then run on that worker: the photos (or the video,

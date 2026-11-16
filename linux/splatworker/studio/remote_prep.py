@@ -14,9 +14,17 @@ changed goes back and forth:
 
 Steps the worker can't do run here: a model it doesn't have, a video it can't split, or any error while splitting
 or masking. A camera solve that fails on the worker fails the run (as on the Mac).
+
+When the same worker also trains (*Train on* = *Process on*) and it has the ``pipeline`` capability (≥ 1.6.0), the
+whole run is one job there (``POST /v1/pipeline``, :func:`pipeline_ineligible` / :meth:`RemotePrep.whole_pipeline`):
+the photos (ingested here) or the video go up once with every setting, the worker runs frames → masks → sky →
+camera solve → training by itself, and this PC fetches the prepared dataset and then the result — riding out the
+worker being unreachable, and re-attaching to the job when the project is prepared again.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import uuid
 import zipfile
@@ -28,6 +36,38 @@ from .client import ApiError
 from .compute import UPLOADS_FILE, _signature, write_zip
 
 FIND_SECONDS = 20.0       # waiting for the chosen worker to show up on the network (the Mac waits 20 s)
+
+
+PIPELINE_SOURCES = ("photos", "photos360", "video", "video360")
+PIPELINE_OFFLINE = 24 * 3600.0       # the worker may be unreachable this long while the job runs there
+STAGE_TITLES = {"masks": None, "sky": "Finding the sky", "sfm": "Solving cameras", "static": "Fixed parts of the frame",
+                "level": "Finalising dataset", "train": "Training"}
+
+
+def pipeline_ineligible(o, device, train: bool) -> Optional[str]:
+    """Why this run can't be one whole-pipeline job on ``device`` (None = it can). As the Mac's
+    ``RemotePipeline.ineligibility``: training must go to the same worker, the worker needs the ``pipeline``
+    capability, and every stage must be one it runs as this PC would."""
+    if not train or (getattr(o, "train_on", "local") or "local") != o.process_on:
+        return "training runs elsewhere"
+    if "pipeline" not in device.capabilities:
+        return f"{device.name} needs SplatWork for Linux 1.6 or newer for that"
+    if o.source_kind not in PIPELINE_SOURCES:
+        return "this kind of source is prepared step by step"
+    models = [m for m in o.mask_models if m and m != "none"]
+    if len(models) > 1:
+        return "it runs one mask model and this project stacks several"
+    have = worker_models(device.info)
+    need = models + [o.features] + (["sky"] if o.sky else [])
+    lacking = [m for m in need if have is not None and m not in have]
+    if lacking:
+        return f"{device.name} doesn't have {' or '.join(lacking)}"
+    return None
+
+
+def options_fingerprint(o) -> str:
+    d = o.to_dict() if hasattr(o, "to_dict") else dict(vars(o))
+    return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
 class StepUnavailable(RuntimeError):
@@ -264,6 +304,105 @@ class RemotePrep:
         s = self._run_job(did, request, "camera solve")
         self._fetch(s["jobId"], dest, None)      # the solve may undistort the images: take them as it left them
         return s
+
+    # ------------------------------------------------------------ the whole pipeline as one job
+    def pipeline_spec(self, video_request: Optional[Dict[str, Any]], has_priors: bool) -> Dict[str, Any]:
+        """PROTOCOL.md "Whole pipeline jobs": every stage this project's options ask for."""
+        o = self.p.o
+        spec: Dict[str, Any] = {"staticRegions": bool(o.mask_static), "fisheyeMasks": True, "level": False,
+                                "holdoutInterval": int(o.holdout_every) if o.holdout_every and o.holdout_every > 1
+                                else None}
+        if video_request is not None:
+            spec["frames"] = {"request": video_request}
+        models = [m for m in o.mask_models if m and m != "none"]
+        if models:
+            spec["masks"] = {"request": o.mask_request(models[0], "_masks"), "dilatePixels": 4}
+        if o.sky:
+            spec["sky"] = {"request": o.sky_request()}
+        sfm = o.sfm_request(False, False, has_priors)
+        for k in ("imagesDir", "outputDir", "masksDir", "skyMasksDir"):
+            sfm.pop(k, None)
+        spec["sfm"] = {"request": sfm, "sequential": o.source_kind in ("video", "video360"),
+                       "enforceRig": o.source_kind in ("video360", "photos360")}
+        spec["train"] = {"config": {**o.train_config(), "depthWeight": 0.0}}
+        return spec
+
+    def start_pipeline(self, video: Optional[Path], video_request: Optional[Dict[str, Any]],
+                       has_priors: bool) -> str:
+        """Upload the video (or the frames ingested here) and start the pipeline job; it is recorded in
+        project.json (``pipelineJob``) so preparing again re-attaches to it."""
+        if video is not None:
+            self.p._log(f"uploading the video to {self.name} ({video.stat().st_size / 2**20:.0f} MB)")
+            did = self.client.upload(f"/v1/datasets/file?name={quote(video_request['video'])}", video,
+                                     self._progress("the video"), ctype="application/octet-stream")["datasetId"]
+        else:
+            did = self._dataset_for(["frames.json", "masks", "priors.json"])
+        spec = self.pipeline_spec(video_request, has_priors)
+        self.p._log(f"whole pipeline on {self.name}: {json.dumps(spec)}")
+        job = self.client.post("/v1/pipeline", {"datasetId": did, "name": self.p.project.name,
+                                                "pipeline": spec})["jobId"]
+        self.p.project.update(pipelineJob={"jobId": job, "device": self.d.id, "worker": self.name,
+                                           "options": options_fingerprint(self.p.o),
+                                           "videoOnWorker": video is not None})
+        return job
+
+    def follow_pipeline(self, job: str, video_on_worker: bool) -> Path:
+        """Follow the pipeline job: its stages show as this run's stages; once the dataset is prepared it is
+        fetched into the project (the images too when the video was split there); then the training's previews
+        and, at the end, the result. Returns the result's path."""
+        from .compute import ComputeRun
+
+        p = self.p
+        run = ComputeRun(p, getattr(p, "devices", None), {})
+        state = {"stage": None, "adopted": False}
+
+        def on_status(s: Dict[str, Any]) -> None:
+            p.emit("job", s)
+            stage = s.get("stage")
+            if stage and stage != state["stage"]:
+                state["stage"] = stage
+                title = STAGE_TITLES.get(stage)
+                if stage == "frames":
+                    title = "Extracting frames"
+                elif stage == "masks":
+                    title = next((t for t in p._titles if t.startswith("Masks")), None)
+                if title in p._titles:
+                    p._stage(title)
+                p._log(f"on {self.name}: {stage}")
+            total = s.get("totalSteps") or 0
+            msg = s.get("message") or stage or ""
+            p._progress(min(1.0, (s.get("step") or 0) / total) if total else 0.0, f"On {self.name}: {msg}")
+            if not state["adopted"] and s.get("outputDatasetId") and (stage == "train" or s.get("state") == "completed"):
+                self.adopt_dataset(s["outputDatasetId"], video_on_worker)
+                state["adopted"] = True
+        dest = p.project.new_output_path()
+        out, _sky = run._finish_job(self.client, self.d, job, p.project.name, dest, on_status, with_preview=True,
+                                    local=False, max_offline=PIPELINE_OFFLINE)
+        p.project.update(pipelineJob=None, lastJob={"jobId": job, "device": self.name, "startedAt": time.time()})
+        return out
+
+    def adopt_dataset(self, dataset_id: str, video_on_worker: bool) -> None:
+        """The prepared dataset into the project (without the images when they are already here)."""
+        import shutil
+
+        tmp = self.p.project.root / f".download-{uuid.uuid4().hex[:8]}.zip"
+        q = "" if video_on_worker else "?skip=images"
+        self.p._log(f"downloading the prepared dataset from {self.name}")
+        try:
+            self.client.download(f"/v1/datasets/{dataset_id}/archive.zip{q}", tmp)
+            merge_zip(tmp, self.ds)
+        finally:
+            tmp.unlink(missing_ok=True)
+        shutil.rmtree(self.ds / ".pipeline", ignore_errors=True)
+        try:
+            doc = json.loads((self.ds / "dataset.json").read_text(encoding="utf-8"))
+            cams = doc.get("cameras") or []
+            stats = {"cameras": len(cams), "masked": sum(1 for c in cams if c.get("mask")),
+                     "sky": sum(1 for c in cams if c.get("sky")), "holdout": sum(1 for c in cams if c.get("holdout"))}
+            self.p.project.update(datasetStats=stats)
+            self.p._log(f"dataset: {stats}")
+        except (OSError, ValueError):
+            pass
 
 
 def merge_zip(zip_path: Path, dest: Path, max_files: int = 2_000_000) -> int:

@@ -38,8 +38,15 @@ Status: ✅ done · 🟡 partial (what is missing is said) · ⏳ not yet · ➖
   `.remote-uploads.json`, which training on that worker also uses); a video is streamed up unchanged and its frames
   become that copy (*Split videos on the worker*, `net.videoOnWorker`). Each step composes the stored images with only
   the folders it reads and fetches only its output (`output.zip?skip=images` for masks). A missing model, or an error
-  splitting / masking, runs that step here; a camera solve that fails there fails the run. Not yet: the whole-pipeline
-  job (`POST /v1/pipeline`) the Mac uses when the same worker also trains.
+  splitting / masking, runs that step here; a camera solve that fails there fails the run. When the same worker also
+  trains (*Train on* = *Process on*) and has the `pipeline` capability, the whole run is one job there
+  (1.7.12, `POST /v1/pipeline`, as the Mac's `RemotePipeline`): photos / 360° photos are ingested here and their
+  `images/` + `frames.json` go up (reusing the stored copy), a video goes up unchanged with a `frames` stage; the
+  worker runs frames → masks → sky → camera solve → training; this PC follows it (offline for up to 24 h), fetches
+  the prepared dataset (`archive.zip`, without images unless the video was split there) when training starts, then
+  the previews and the result. The job is recorded in project.json (`pipelineJob`) and followed again by "Prepare
+  again" with the same settings. Not eligible (then step by step, logged): another training device, a worker
+  before 1.6, a home video / stereo / posed source, several stacked mask models, or a model the worker lacks.
 * **GPU sharing.** One training job per GPU at a time; processing jobs hold a GPU only during their GPU steps
   (1.7.6, `splatworker/gpulease.py`, PROTOCOL.md "GPU only for GPU steps"). Queued jobs are ordered by priority, then age: local
   Studio jobs are submitted with `priority: 1` (the person at the PC goes first) unless *Local jobs go first* is
