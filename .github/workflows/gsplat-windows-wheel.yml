@@ -32,6 +32,7 @@ jobs:
         shell: bash
         run: |
           grep -v '^#' linux/flatpak/gsplat-pin.env | sed '/^$/d' >> "$GITHUB_OUTPUT"
+          # hashes the CRLF checkout; the Pages job in splat-worker-flatpak.yml computes the same key on Linux
           echo "key=gsplat-win-$(sha256sum linux/flatpak/gsplat-pin.env | cut -c1-16)" >> "$GITHUB_OUTPUT"
       - name: Cache wheel
         id: cache

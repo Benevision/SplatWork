@@ -241,7 +241,8 @@ jobs:
       # SplatWork for Windows' gsplat 1.6 wheel (gsplat-windows-wheel.yml), cached per pin; missing until built
       - name: Windows wheel cache key
         id: winpin
-        run: echo "key=gsplat-win-$(sha256sum linux/flatpak/gsplat-pin.env | cut -c1-16)" >> "$GITHUB_OUTPUT"
+        # the same key gsplat-windows-wheel.yml computes: its Windows checkout has CRLF line endings, so hash that form
+        run: echo "key=gsplat-win-$(sed 's/$/\r/' linux/flatpak/gsplat-pin.env | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
         with:
           path: wheels-win
