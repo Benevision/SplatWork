@@ -26,13 +26,13 @@ final class AppSettings {
             capture = CaptureSettings()
         }
         pairingCodes = (UserDefaults.standard.dictionary(forKey: "pairingCodes") as? [String: String]) ?? [:]
+        videoFormats = VideoFormatOption.available()
         // Once: a saved "Auto" shutter (from before 1/250 s was the default) let the camera pick 1/33 s indoors, the
         // main cause of blurred captures. Choosing Auto again afterwards sticks.
         if !UserDefaults.standard.bool(forKey: "shutterLimitMigrated") {
             UserDefaults.standard.set(true, forKey: "shutterLimitMigrated")
             if capture.maxShutterSeconds <= 0 { capture.maxShutterSeconds = 1.0 / 250 }
         }
-        videoFormats = VideoFormatOption.available()
         if !DeviceInfo.hasLiDAR {
             capture.recordDepth = false
         }
