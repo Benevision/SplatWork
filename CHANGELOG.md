@@ -17,7 +17,10 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
   app in both modes: a few times a second it sets the shutter itself, never slower than the limit, and steers ISO
   by the camera's metering. A locked recording holds the last values. Before, the limit was applied once when
   exposure locked, and ARKit undid it (captures at 1/91–1/100 s). The camera's built-in limit was ignored too, and
-  Stereo mode had none at all (1/33–1/50 s indoors). Both modes log the applied exposure to the Xcode console. New *Torch while recording* for dim rooms. *High-resolution stills* is now on by default
+  Stereo mode had none at all (1/33–1/50 s indoors). The dual camera used by Stereo mode doesn't allow custom
+  exposure, but there the camera's own limit holds. Checked on an iPhone: a LiDAR capture at 1/250 s, ISO 1600, and
+  a Stereo capture at 1/250 s, ISO 1000–6400. A shutter limit saved as "Auto" (no limit) moves once to 1/250 s.
+  Both modes log the applied exposure to the Xcode console. New *Torch while recording* for dim rooms. *High-resolution stills* is now on by default
   for new installs: in a side-by-side test they were far less blurred than video frames. Stereo mode falls back
   without the depth stream on iPhones that can't stream depth while taking photos from both cameras (they stopped
   the camera: a frozen preview).

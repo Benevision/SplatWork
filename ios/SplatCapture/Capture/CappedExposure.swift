@@ -34,7 +34,8 @@ final class CappedExposure: @unchecked Sendable {
             frozen = false
             guard seconds > 0 else { release(device); return }
             guard device.isExposureModeSupported(.custom) else {
-                log("custom exposure not supported: shutter limit can't be applied (camera keeps auto-exposure)")
+                // the dual-wide camera: its own limit (activeMaxExposureDuration, set by the caller) holds instead
+                log("custom exposure not supported on this camera: using its own shutter limit")
                 return
             }
             log(String(format: "capped auto-exposure on: shutter ≤ 1/%.0f s", 1 / seconds))
