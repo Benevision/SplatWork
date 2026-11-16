@@ -7,6 +7,7 @@
 | [User guide](USER_GUIDE.md) | Installing, creating projects, training, viewing, editing, exporting and troubleshooting |
 | [Settings reference](SETTINGS.md) | Every setting with its default, range and explanation (the same text as the app's ⓘ buttons) |
 | [SplatWork for Linux](../linux/README.md) | Installing and running the Linux worker and studio, GPU runtimes, headless and service use |
+| [SplatWork for Windows](../windows/README.md) | Installing the Windows worker and studio, GPUs, updates, how it is built and tested |
 | [SplatWork Capture](../ios/README.md) | Building, signing and using the iPhone app, capture tips |
 | [splatprep](../tools/README.md) | The processing toolkit: camera solving, masks, frames, benchmarks, command line |
 
@@ -24,7 +25,10 @@
 | [Contributing](../CONTRIBUTING.md) | Repository layout, building, tests, sending changes |
 | [Development status](dev/STATUS.md) | Versions, what is tested and how, known issues, next work, how to release |
 | [Roadmap](dev/ROADMAP.md) | The plan from here to a public release: hardening, platform parity, distribution, beta |
-| [GPU support (AMD / Intel)](dev/GPU_SUPPORT.md) | Where the Linux app assumes NVIDIA today and the options for AMD and Intel |
+| [GPU support (AMD / Intel)](dev/GPU_SUPPORT.md) | AMD and Intel support: the Vulkan trainer, GPU slots, test plans |
+| [AMD test on SteamOS](dev/AMD_TEST_STEAMOS.md) | Step-by-step test of SplatWork for Linux on an AMD GPU under SteamOS |
+| [Windows notes](dev/WINDOWS.md) | How SplatWork for Windows is built, packaged and tested, and what is still to do |
+| [Home video (VHS)](dev/VHS.md) | How old tape footage is split into clips, restored and turned into splats |
 | [Linux studio notes](dev/LINUX_STUDIO.md) | How SplatWork for Linux's studio is built, feature parity with the Mac, manual GPU test plan |
 | [Security policy](../SECURITY.md) | Reporting vulnerabilities |
 | [Changelog](../CHANGELOG.md) | What changed in each release |

@@ -1,6 +1,6 @@
 # Roadmap: from a working suite to a public release
 
-Written 2026-11-15 from `main` at `8c13b7f` (see [STATUS.md](STATUS.md) for what is tested and known issues). The
+Written 2026-11-15 from `main` at `8c13b7f`, updated for the 1.3.0 release (2026-11-16) (see [STATUS.md](STATUS.md) for what is tested and known issues). The
 goal: someone who isn't us downloads SplatWork, installs it without warnings, gets a good splat on supported
 hardware the first time, isn't exposed to network or licensing risk, and can tell us when something goes wrong.
 
@@ -13,9 +13,9 @@ distribution, not in features.
 | Area | State | Gap for wider use |
 |---|---|---|
 | Mac app | Main app, used daily, end-to-end on real data | Ad-hoc signed (Gatekeeper warns); no automated Swift tests; 2 accessibility labels; English only |
-| SplatWork for Linux | Used on the RTX 4080 PC; 362 tests | Flatpak id `com.example.SplatWorker` (placeholder; blocks Flathub); behind the Mac in the interface |
-| Vulkan trainer (AMD / Intel) | Stages 1–3, default on AMD / Intel since 1.7.0 | Never run on a real GPU; densification on the CPU |
-| SplatWork for Windows | MSI + zip, CI on `windows-latest` | Never run on a real PC or GPU; unsigned (SmartScreen); RTX 50 wheel still building |
+| SplatWork for Linux | Used on the RTX 4080 PC; 434 tests; signed Flatpak repository | Flatpak id `com.example.SplatWorker` (placeholder; blocks Flathub); behind the Mac in the interface |
+| Vulkan trainer (AMD / Intel) | Stages 1–3, default on AMD / Intel since 1.7.0; per-GPU slots and job moves (1.7.3–1.7.8) | First real-GPU runs 2026-11-16 (RTX 4080, Radeon 610M); no comparison against gsplat or discrete AMD card yet; densification on the CPU |
+| SplatWork for Windows | MSI + zip, CI on `windows-latest` | Never run on a real PC or GPU; unsigned (SmartScreen); no Vulkan trainer yet |
 | SplatWork Capture (iPhone) | 1.2, builds | Build from source only; not run on a phone for 1.2 |
 | Security | 5 of 25 review findings fixed (F2, F3, F5, F6, F21) | About 20 open, incl. plain HTTP with bearer tokens, the unauthenticated iPhone worker, pairing-code brute force, out-of-bounds reads in the PLY / ZIP parsers, symlinks in worker outputs |
 | Licensing | Model licences shown before download | The **defaults** use non-commercial weights: SuperPoint (feature matching) and SegFormer (sky masks) |
@@ -23,15 +23,13 @@ distribution, not in features.
 
 ## Phase 0: finish what's in flight (days)
 
-1. **Drone fixes** (code written; a check solve of the 1,229 photos is running): GPS-held re-solve when the fast
-   solve places < 70 %; worker-bound training waits up to 15 min for an unreachable worker. Commit, then Redo from
-   Cameras on the Drone project.
-2. **RTX 50 wheel for Windows** (Windows session): land it, merge `claude/windows-app-84ce39`.
-3. **Real-GPU checks of the Vulkan trainer:** RTX 4080 comparison (`compare_training.sh`), RX 6700 XT on SteamOS
-   (`AMD_TEST_STEAMOS.md`). If it is not close to gsplat, make it opt-in on AMD / Intel too and label it
-   experimental.
+1. ~~**Drone fixes**~~: done (511f5a5; 498 → 904 photos placed on the sample survey).
+2. ~~**RTX 50 wheel for Windows**~~: done (published on the wheel index; merged to `main`).
+3. **Real-GPU checks of the Vulkan trainer:** *Compare trainers* (1.7.9) on the RTX 4080, RX 6700 XT or Steam Deck
+   on SteamOS (`AMD_TEST_STEAMOS.md`). If it is not close to gsplat, make it opt-in on AMD / Intel too (it is
+   already labelled experimental).
 
-Done when: all three are in, or written down as known limits.
+Done when: the last item is in, or written down as a known limit. 1.3.0 was released with it open.
 
 ## Phase 1: hardening (2–3 weeks)
 
@@ -84,7 +82,7 @@ written real-hardware test.
    so this needs an Apple Developer Program membership and the secrets.
 2. **Windows:** sign the MSI and the executables (Azure Trusted Signing or an OV certificate) so SmartScreen
    doesn't block it. Add an update check like the Mac's `Updater`.
-3. **Linux:** pick a real Flatpak id (reverse DNS of a domain you control, or `io.github.Benevision.SplatWork`),
+3. **Linux:** the repository is GPG-signed since 2026-11-16. Pick a real Flatpak id (reverse DNS of a domain you control, or `io.github.Benevision.SplatWork`),
    ship the old id with `end-of-life-rebase` so existing installs move over, then submit to Flathub. Keep the
    Bonjour names and the Keychain service as they are.
 4. **iPhone:** TestFlight first (needs the same Apple membership), App Store later.
@@ -109,7 +107,8 @@ Done when: each platform installs without a security warning, and every app tell
 
 ## Phase 5: public beta, then 2.0 (4–6 weeks of real use)
 
-1. Release **1.3.0** after a fresh dry run, marked as a public beta on the website.
+1. Release the first version after phases 1–4 (1.3.0 shipped before them, on 2026-11-16) after a fresh dry run,
+   marked as a public beta on the website.
 2. Invite 10–20 testers with different hardware (Apple silicon generations, RTX 30 / 40 / 50, an AMD card, Windows
    and Linux), each with a short test script and the diagnostics button.
 3. Weekly triage of issues; patch releases as needed. Watch for the same failure from several people.

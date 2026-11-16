@@ -17,7 +17,8 @@ collected in the [settings reference](SETTINGS.md) and in **Help → Settings Re
 9. [Moving objects](#9-moving-objects-people-pets-cars)
 10. [Compute devices and the benchmark](#10-compute-devices-and-the-benchmark)
 11. [Setting up a Linux worker](#11-setting-up-a-linux-worker)
-12. [Troubleshooting](#12-troubleshooting)
+12. [SplatWork for Windows](#12-splatwork-for-windows)
+13. [Troubleshooting](#13-troubleshooting)
 
 ## 1. Install
 
@@ -30,7 +31,9 @@ To build it yourself instead: `cd mac && ./scripts/build_app.sh && open build/Sp
 
 **Optional extras:**
 - **SplatWork for Linux** on a Linux PC with an NVIDIA GPU trains faster and runs the learned camera solvers and masks.
-  See [section 11](#11-setting-up-a-linux-worker).
+  AMD and Intel GPUs train too, with an experimental Vulkan trainer. See [section 11](#11-setting-up-a-linux-worker).
+- **SplatWork for Windows** does the same on a Windows PC with an NVIDIA GPU. It is new and tested only in CI so far.
+  See [section 12](#12-splatwork-for-windows).
 - **SplatWork Capture** on an iPhone (LiDAR models give the best results). See [ios/README.md](../ios/README.md).
 - **The Models pack** adds learned feature matchers and segmentation models to the Mac itself. Install it from
   **Models & Benchmarks**.
@@ -94,18 +97,29 @@ Easy, every 8th in Advanced), which keeps some photos aside to measure quality h
 their scale and gravity. On a 649-frame bedroom scan it took 3.6 minutes instead of 28 for a full re-solve and gave
 +2.1 dB on held-out photos. If it can't run, the capture's own poses are used.
 
-**Photo locations (GPS).** Phones and drones record where each photo was taken. With *Use photo locations* on (the
-default, shown when photos have locations), the imported copies keep only that location, and learned camera solving
-checks the solved cameras against it: if they agree, the scene is put in metres with Z up and stray cameras are
-dropped; otherwise you get a warning. Turn it off and the project's photos carry no location at all. Apple Object
-Capture doesn't use locations. Cameras placed far off the camera path are dropped for any source.
+**Photo locations (GPS).** Phones and drones record where each photo was taken. With *Use photo locations (GPS)* on
+(the default, shown when photos have locations), the imported copies keep only that location (and a drone's height
+above take-off), and learned camera solving uses it:
+- Photos are matched with their GPS neighbours, so neighbouring flight lines are linked by where they were taken,
+  not by look-alike buildings.
+- The solved cameras are checked against GPS. If they agree, the scene is put in metres with Z up. Up to 15 % of
+  cameras that are far from their GPS position are left out, as long as the rest match.
+- If the quick solve folds or doubles the scene, or places under 70 % of the photos, the cameras are solved again
+  held to their GPS positions. The new solve is kept if it matches GPS and places more photos.
+- If the solve still doesn't match GPS, preparation stops with a message instead of training on a wrong scene. Turn
+  off *Use photo locations* to keep it anyway.
+
+Turn it off and the project's photos carry no location at all. Apple Object Capture doesn't use locations. Cameras
+placed far off the camera path are dropped for any source.
 
 **Drone footage.** Photos from a drone are recognised by the drone's own markers (the camera maker, DJI's flight and
 gimbal tags, DJI file names), never by GPS alone, so phone photos with locations are treated as ordinary photos. For
 drone footage, or anything started from the Drone / aerial tile, *Aerial settings* switch camera solving to COLMAP /
 GLOMAP with SuperPoint + LightGlue (GPS-checked, which needs the Models pack or a worker), turn on the sky, and pick the
-High quality preset. Turn the switch off to go back to the standard settings. Locations from a drone video's flight
-log (`.SRT`) aren't used yet.
+High quality preset. Turn the switch off to go back to the standard settings. *Leave out take-off and landing shots*
+(on by default) drops photos taken near the ground while the rest of the flight is well above: under 5 m above
+take-off, or under 30 % of the flight's usual height. It needs DJI's height above take-off, so it does nothing for
+phone photos. Locations from a drone video's flight log (`.SRT`) aren't used yet.
 
 **Masks** mark pixels that training ignores:
 - *Remove people & pets — quick* (Apple Vision, built in).
@@ -127,10 +141,27 @@ log (`.SRT`) aren't used yet.
 When the project folder already holds results from an earlier run, **Reuse what the last run in this folder
 finished** skips every stage whose settings and source files haven't changed.
 
-While a project is being prepared, the progress screen shows overall progress, each stage with its duration, the
-elapsed time, the estimated time left, and when the current step last reported. **Hide** keeps it running in the
-background; the progress button in the toolbar brings it back. If processing fails, **Try Again** continues from the
-stage that failed.
+While a project is being prepared, the preparation screen shows:
+- a progress ring with the elapsed time and the time left;
+- a timeline of every step with its time (photos, upload, masks, sky, camera solve, finalise, download);
+- a card for the current step: where it runs (this Mac or a Linux worker), live counters with a rate ("9,866 of
+  14,128 pairs"), the camera-solve sub-steps and the recent activity;
+- live previews: the latest photos, the masks, the sky tinted onto the photos, and a top-down map of the solved
+  cameras over the sparse points;
+- for an upload to a worker, its size, speed and time left.
+
+The full log is one click away. **Hide** keeps it running in the background; the progress button in the toolbar
+brings it back. If processing fails, **Try Again** continues from the stage that failed.
+
+**Uploads to workers.** Photos sent to a Linux worker are re-saved for the upload only; the project keeps the
+originals, with their location and drone height. *Settings → Uploads to workers → Upload size*:
+- **Standard** (default): about ¾ of the bytes;
+- **Compact:** about half;
+- **Original:** the files as they are.
+
+Both re-saved sizes differ from the originals far less than a splat can show. Videos are always sent as they are.
+Uploads go in batches of about 200 MB, so an interrupted upload resumes with the batches that are missing instead
+of starting again.
 
 **Project layout:** `<project>/project.json` (source, settings and status), `<project>/dataset/` (posed images and
 `dataset.json`), and `<project>/outputs/*.ply` (results).
@@ -241,6 +272,12 @@ Macs with *Compute → Act as a worker* turned on.
   merged into one splat. Each device gets blocks it has the memory for, in proportion to its speed. Smaller scenes
   train whole on the device expected to finish first.
 - **Too big for one device**: the scene is trained there in blocks that fit, one after another, and merged.
+- **A Linux worker with several GPUs** (SplatWork for Linux 1.7.8 or newer, for example an RTX 4080 with an
+  integrated Radeon) gets one block at a time per training GPU. The worker decides which GPU each block runs on, and
+  moves a block to a faster GPU when one frees up.
+
+When a run should start on a Linux worker that is briefly unreachable (for example while it updates itself), the Mac
+waits up to 15 minutes ("Waiting for BensPC — it may be restarting after an update") instead of failing.
 
 After you run the [benchmark](#10-compute-devices-and-the-benchmark), the line under the device list shows the
 estimated time on each machine, including the upload, and marks the fastest.
@@ -248,7 +285,8 @@ estimated time on each machine, including the upload, and marks the fastest.
 ### The dashboard
 
 The Train tab shows the step, speed, elapsed time and time left, the splat count, and charts of training PSNR,
-held-out PSNR and splat count. Block runs list every block with its device, stage, progress, speed and time left.
+held-out PSNR and splat count. Block runs list every block with its device, stage, progress, speed and time left;
+a block on a Linux worker also shows its GPU ("BensPC · RTX 4080") in the *Devices* list and the progress bar.
 
 - **Pause / Resume** holds every device: this Mac's trainer stops between steps, and a worker saves its job's state
   and frees its GPU until you resume.
@@ -283,6 +321,13 @@ grid of colour adjustments instead of one correction for the whole photo, so sha
 during the capture don't smear. On a 1,258-photo drone flight it raised held-out PSNR by about 0.8 dB (16.37 →
 17.18 dB on the Mac, 17.16 → 17.91 dB on a worker); on an indoor scan it made no difference. Turn it off to save
 some training time on captures with steady light.
+
+**Colour-correction safeguard.** On a wrong camera solve, per-photo colour correction can take over the scene's
+colour: the splat comes out dark or flat, its colours held by the correction. From step 4,000, training checks
+some photos rendered without the correction. If they fall well below their best twice in a row, or come out much
+darker than the photos, every photo's correction is reset; the second time, it is turned off for the rest of the
+run. The log says so and points at the camera solve. This runs on the Mac and on Linux workers, and stays quiet
+on healthy runs.
 
 ## 6. Viewing
 
@@ -393,12 +438,17 @@ Full details are in [linux/README.md](../linux/README.md).
    ```bash
    flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
    ```
-2. **Open SplatWork for Linux.** The setup assistant (**Set Up…**) finds your NVIDIA driver, lists what it will download
-   (about 2.7 GB, needing about 6 GB of disk) and installs a private Python, PyTorch and gsplat inside the app's own
-   folder. You can cancel and retry; it resumes from the step that failed and never breaks a working setup.
-   - Driver 570 or newer (RTX 20 to RTX 50 series): PyTorch 2.7 + CUDA 12.8 + gsplat 1.6.
-   - Driver 520–569: PyTorch 2.4 + gsplat 1.5.3.
-   - No NVIDIA GPU: a processing-only setup (camera solving and masks on the CPU).
+   The repository is signed. An older system-wide install that `flatpak update` refuses ("Can't pull from untrusted
+   non-gpg verified remote") needs `flatpak uninstall --system com.example.SplatWorker`, then the command above.
+2. **Open SplatWork for Linux.** The setup assistant (**Set Up…**) finds your GPUs, lists what it will download
+   (about 2.7 GB for NVIDIA, needing about 6 GB of disk) and installs a private Python, PyTorch and gsplat inside the
+   app's own folder. You can cancel and retry; it resumes from the step that failed and never breaks a working setup.
+   - NVIDIA, driver 570 or newer (RTX 20 to RTX 50 series): PyTorch 2.7 + CUDA 12.8 + gsplat 1.6.
+   - NVIDIA, driver 520–569: PyTorch 2.4 + gsplat 1.5.3.
+   - AMD or Intel, integrated GPUs included: training with the built-in Vulkan trainer, which needs no download. It
+     is experimental: it hasn't been compared with gsplat on real GPUs yet. The processing runtime runs camera
+     solving and masks on the GPU through ROCm (AMD) or XPU (Intel Arc) where it can, and on the CPU otherwise.
+   - No usable GPU: a processing-only setup (camera solving and masks on the CPU).
 3. **Turn the server on** with the big switch. To run without a window, use
    `flatpak run com.example.SplatWorker --headless`.
 4. **On the Mac**, the worker appears under **Compute** by itself. If it doesn't, add it by the address shown on the
@@ -407,9 +457,39 @@ Full details are in [linux/README.md](../linux/README.md).
 6. **Processing models:** install them on the worker from the Mac's Compute page to run camera solving, learned masks
    and video splitting there.
 
-SplatWork for Linux updates itself when no job is running, keeping its settings, token and GPU runtime.
+**Several GPUs.** Each GPU ticked in the worker's *Settings → GPUs* trains one job at a time, integrated GPUs
+included. An integrated GPU beside a faster card starts unticked. *Measure GPU speed* times each GPU on the benchmark
+scene (about a minute per GPU); a GPU under a quarter of the fastest counts as slower and, by default, starts a job
+only while the faster GPUs are busy (*Only when faster GPUs are busy*, or *Always use, like any other GPU*). With
+*Move jobs to a faster GPU when one is free* on, such a job pauses and continues on the faster GPU when it frees up.
 
-## 12. Troubleshooting
+Other worker settings worth knowing: *Settings → Training → Trainer* (Automatic, gsplat (NVIDIA) or Vulkan
+(experimental)), *Decode video on* (Automatic uses the NVIDIA GPU's video decoder when it gives the same pictures as
+the CPU) and *Processing jobs at once*. **Models & Benchmarks → Compare trainers** trains the benchmark scene with
+gsplat and with the Vulkan trainer on the same GPU and shows speed and quality side by side.
+
+SplatWork for Linux updates itself when no job is running, keeping its settings, token and GPU runtime. **Check for
+Updates…** in its main menu (or *Settings → Startup and background → Check Now*) checks at once and can install a
+newer version straight away.
+
+## 12. SplatWork for Windows
+
+SplatWork for Windows is SplatWork for Linux's worker and studio for Windows 10 / 11 (x64). It is new and has been
+tested in CI only, not yet on a real PC. Full details are in [windows/README.md](../windows/README.md).
+
+1. **Install** `SplatWork-X.Y.Z-Windows-x64.msi` from the [Releases page](https://github.com/Benevision/SplatWork/releases).
+   It asks once for administrator rights to add firewall rules for TCP 7878 and UDP 5353, for Private networks only.
+   The installer isn't code-signed yet: if SmartScreen warns, choose **More info** → **Run anyway**. A portable
+   `.zip` is published too; it adds no firewall rules, so allow SplatWork when Windows asks.
+2. **Set up** the GPU runtime when the app first starts (about 3 GB, in `%LOCALAPPDATA%\SplatWork`).
+3. **Turn the server on.** The Mac finds the PC under **Compute**, as with a Linux worker.
+
+Training needs an NVIDIA GPU: driver 570 or newer gets PyTorch 2.7 + CUDA 12.8 with gsplat 1.6, which covers RTX 20
+to RTX 50 series cards; older drivers get PyTorch 2.4 with gsplat 1.5.3. On AMD and Intel cards the viewer, editing
+and processing work (processing on the CPU), but not training yet. **Update…** downloads the new installer, checks
+it and installs it, keeping settings, the GPU runtime and projects.
+
+## 13. Troubleshooting
 
 - **The PC says "NVIDIA driver libraries are missing in the sandbox"** (often after a driver update): Flatpak needs an
   extension that matches your driver version exactly. The message shows the command, for example:
@@ -426,6 +506,15 @@ SplatWork for Linux updates itself when no job is running, keeping its settings,
 - **The scene is upside down or tilted:** use Orientation → Level to current view, or pick an axis.
 - **Training looks hazy or blotchy across photos:** leave per-photo and local colour correction on for video, drone
   and handheld photos.
+- **The log says colour correction was reset or turned off:** the [safeguard](#changing-light-local-colour-correction)
+  found it taking over the scene's colour. That usually means the camera solve is wrong: check the training cameras,
+  or try another camera solver.
+- **Preparation stops because the cameras don't match GPS:** the solve folded or doubled the scene. Try another
+  camera solver or more overlapping photos, or turn off *Use photo locations* to keep the solve anyway.
+- **`flatpak update` on the PC says "Can't pull from untrusted non-gpg verified remote":** a system-wide install
+  from before the repository was signed. Run `flatpak uninstall --system com.example.SplatWorker`, then install
+  again with the `--user` command in [section 11](#11-setting-up-a-linux-worker). Settings and the GPU runtime are
+  kept.
 - **360° video uses a lot of disk:** an 8K 360° clip decodes to about 10,000 frames, each cut into several views (one
   test produced 4.4 GB of frames). Leave room on both machines. A worker keeps uploaded datasets until they are
   deleted, and limits uploads to 20 GB (40 GB once unpacked) by default; change that in the worker's Settings.

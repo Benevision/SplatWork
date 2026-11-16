@@ -181,7 +181,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 
 | Method & path | Body | Response |
 |---|---|---|
-| `GET /v1/info` | – | `{"name","version":1,"gpus":[{"name","memoryMB","freeMemoryMB"}],"backend":"gsplat 1.x","busy":bool,"queueLength":int}`; worker ≥ 1.7.3 adds `"slots":[{"id","name","kinds","cuda","vulkan","integrated","slow","memoryMB","busy","stepsPerSecond","relativeSpeed"}]` — one job per slot at a time; speeds are measured Vulkan training steps/s (null until measured, `splatworker measure-gpus`). `"gpus"` lists the fast slots only: a `slow` slot (measured under 25 % of the fastest; unmeasured, an integrated GPU beside another) takes a train job that names it, or — worker ≥ 1.7.8 — any waiting train job (block jobs too) that fits its memory while every fast slot is busy; with the Vulkan trainer the job then moves to a fast slot when one frees up (paused, resumed there from the same step, same jobId; `JobStatus` `"slot"` says where it runs). 1.7.8 adds `"slower"` and `"userChoice"` (`"auto"` | `"always"`: the user made a slower GPU an ordinary slot, so `slow` is false) |
+| `GET /v1/info` | – | `{"name","version":1,"gpus":[{"name","memoryMB","freeMemoryMB"}],"backend":"gsplat 1.x","busy":bool,"queueLength":int}`; worker ≥ 1.7.3 adds `"slots":[{"id","name","kinds","cuda","vulkan","integrated","slow","memoryMB","busy","stepsPerSecond","relativeSpeed","measuredSize"}]` — one job per slot at a time; speeds are measured Vulkan training steps/s (null until measured, `splatworker measure-gpus`). `"gpus"` lists the fast slots only: a `slow` slot (measured under 25 % of the fastest; unmeasured, an integrated GPU beside another) takes a train job that names it, or — worker ≥ 1.7.8 — any waiting train job (block jobs too) that fits its memory while every fast slot is busy; with the Vulkan trainer the job then moves to a fast slot when one frees up (paused, resumed there from the same step, same jobId; `JobStatus` `"slot"` says where it runs). 1.7.8 adds `"slower"` and `"userChoice"` (`"auto"` | `"always"`: the user made a slower GPU an ordinary slot, so `slow` is false) |
 | `POST /v1/datasets` | raw zip of the `dataset/` directory (`Content-Type: application/zip`) | `{"datasetId": "abc"}` |
 | `POST /v1/jobs` | `{"datasetId":"abc","name":"Kitchen","config":{TrainingConfig}}` (+ optional `"slot"`: an id from `/v1/info` `"slots"` — the job runs on that GPU only; worker ≥ 1.7.3; + optional `"trainer"`: `"gsplat"` or `"vulkan"` for this job, one of `/v1/info` `"trainers"`, worker ≥ 1.7.9 — `JobStatus` then has `"trainer"`, and `"evalSsim"` once evaluated) | `{"jobId":"j1"}` |
 | `GET /v1/jobs` | – | `[JobStatus]` |
@@ -197,6 +197,31 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `POST /v1/jobs/{id}/prioritize` | – | `JobStatus`; moves a **queued** job to the front (priority above every other queued job); `409` otherwise; desktop app on the worker PC only (`403` for others) (worker ≥ 1.4.0, capability `priority`) |
 | `POST /v1/census` | `{"datasetId","jobId":<completed train job>}` or, from the desktop app on the worker PC only, `{"datasetId","plyPath":"/abs/scene.ply"}` | `{"jobId":"c…"}` — Auto clean census, a job of kind `census` (worker ≥ 1.4.0, capability `census`) |
 | `GET /v1/jobs/{id}/census.npz` | – | numpy `.npz`: `peak` (float32, per splat: largest per-photo summed blending weight, in native pixels) and `views` (uint32: photos where that sum ≥ 0.02) |
+
+**GPUs and trainers in `/v1/info`.** Besides `"gpus"` and `"slots"` above, a worker reports:
+
+* `"gpus"` entries carry `"vendor"` (`nvidia` | `amd` | `intel` | `other`, worker ≥ 1.6.0). With the Vulkan trainer
+  chosen, fast GPUs only it can use (AMD / Intel without a GPU PyTorch) are listed too.
+* `"adapters"` (worker ≥ 1.6.0): every graphics card of any vendor, also ones jobs can't use —
+  `{"vendor","name","pci","driver","integrated","gfx"?,"memoryMB"?,"freeMemoryMB"?}` (`gfx`: an AMD card's ISA).
+* `"trainer"` (worker ≥ 1.7.0): which trainer trains by default — `{"kind": "gsplat" | "vulkan" | null,
+  "experimental": bool, "reason": "…"}`, plus for the Vulkan trainer the device it found (`"device"`, `"driver"`,
+  `"deviceType"`, `"memoryMB"`, `"vendorID"`, `"subgroupSize"`, `"nativeAtomics"`, when known). `"backend"` then
+  reads "SplatWork Vulkan trainer (experimental) on <device>".
+* `"trainers"` (worker ≥ 1.7.9): the trainers a train job may ask for (`"trainer"` in `POST /v1/jobs`):
+  `"gsplat"` when the CUDA runtime is installed, `"vulkan"` when the Vulkan trainer finds a GPU.
+* `"vulkanDevices"` (worker ≥ 1.7.5): every usable Vulkan GPU, also unticked and slow ones, with its measured
+  speed — `{"index","name","pci","integrated","slot","stepsPerSecond","size","splats","photos","peakMemoryMB",
+  "measuredAt"}`. `slot` is the slot id it trains for (null when it has none); the measurement fields are null
+  until `splatworker measure-gpus` (or *Settings → GPUs → Measure GPU speed*) has timed it; `size` is the benchmark
+  scene size it was measured at (speeds are only compared at the same size).
+* `"cpuJobs"` (worker ≥ 1.7.6, below).
+
+**Training jobs at once (worker ≥ 1.7.8).** A worker runs one train job per slot whose `kinds` include `"train"`,
+slower slots included (they start waiting train jobs while the fast ones are busy, and the job moves on when a
+fast slot frees up). SplatWork submits that many blocks of a block run to such a worker at once
+(`WorkerInfo.trainingSlots`, the capacity of that device in `ComputeScheduler`'s `DeviceLocks`); older workers get
+one at a time. The blocks share one upload.
 
 **Shared queue (worker ≥ 1.4.0).** One job per GPU at a time; a free GPU takes the queued job with the highest
 `priority`, oldest first; a running job is never pre-empted. `JobStatus` gains `"priority"` (int) and `"origin"`
@@ -409,9 +434,19 @@ prepared, a failed or cancelled pipeline removes its working dataset.
   "elapsedSeconds": 64.2, "etaSeconds": 1540.0,
   "previewStep": 1000,          // step of latest preview.ply, null if none
   "checkpointStep": 900,        // step of checkpoint.ply (capability "pause"), null/absent if none
+  "gpu": "NVIDIA GeForce RTX 4080",   // the GPU it runs on, null until it starts
+  "slot": "cuda:0",             // worker ≥ 1.7.3: its slot id ("cuda:N", "vk:<pci address or name>", "default");
+                                //   null for processing jobs from 1.7.6 (they lease a GPU per stage: "resource")
+  "trainer": "vulkan",          // train jobs, worker ≥ 1.7.9: the trainer that runs it ("gsplat" | "vulkan")
+  "evalSsim": 0.912,            // worker ≥ 1.7.9: held-out SSIM, once evaluated
   "message": "optional human readable status or error"
 }
 ```
+
+When a ≥ 1.7.8 worker moves a training job from a slower GPU to a faster one, the job keeps its `jobId`: it saves its
+state, goes back to `"queued"` at the front for that GPU (`message` "moving to <GPU> (continues from step N)"),
+then runs again from the same step, so `step` never goes backwards. `gpu` and `slot` change to the new GPU; clients
+should read them on every poll rather than once.
 
 ---
 
@@ -481,7 +516,7 @@ Feature/matcher ids: `colmap_sift`, `sift_lightglue`, `superpoint_lightglue`, `d
 | `POST /v1/process` | `{"datasetId":"…","request":{ProcessingRequest}}` (dataset zip contains `images/` and optional `priors.json`) | `{"jobId":"p1"}` |
 | `GET /v1/jobs/{id}` | – | `JobStatus` with `"kind":"process"`, `step/totalSteps` = progress ×1000, `message` = stage |
 | `GET /v1/jobs/{id}/output.zip[?skip=a,b][&only=c]` | – | zip of `outputDir` when completed (built on request from the output dataset; `skip`/`only` = top-level folders) |
-| `POST /v1/datasets/compose` | `{"layers":[{"datasetId":"A"},{"datasetId":"B","prefix":"sub"}]}` | `{"datasetId":"…","hasDatasetJson":bool,"bytes":n}` — union of the layers' files (hard links, later layers win) |
+| `POST /v1/datasets/compose` | `{"layers":[{"datasetId":"A"},{"datasetId":"B","prefix":"sub"}]}` | `{"datasetId":"…","hasDatasetJson":bool,"bytes":n}` — union of 1–16 layers' files (hard links, later layers win) |
 | `GET /v1/datasets/{id}/archive.zip[?only=…][&skip=…]` | – | the dataset's files as a zip |
 
 `GET /v1/info` adds `"capabilities": ["train","process"]` (+ `"pipeline"`, §4) and `"models": ["superpoint_lightglue", …]` (those actually importable).
@@ -493,6 +528,21 @@ trained there without its frames crossing the network again: it downloads the ou
 `.remote-store.json` (`{"worker","datasetId","dirs":["images"],"local"}`) in the project, sends later steps only what
 changed (masks, priors, `dataset.json`) and composes them over the stored images, and fetches the images in the
 background (`archive.zip?only=images`) for anything that needs them on the Mac.
+
+**Partial layers.** An uploaded dataset (`POST /v1/datasets`, worker ≥ 1.3.8) or — worker ≥ 1.7.2 — a compose
+result whose `dataset.json` names images that aren't all in it is kept as a layer that can't train on its own,
+instead of being refused: `hasDatasetJson` is `false` and the worker records `"partial": true` in its `meta.json`
+(the compose response itself carries only `datasetId`, `hasDatasetJson` and `bytes`). Composing it with the layers that
+hold the images gives a dataset that trains. A malformed `dataset.json` is still refused (`400`).
+
+**Batched, resumable uploads (SplatWork, workers ≥ 1.3.8).** SplatWork uploads a project folder in batches of about
+200 MB (at most 600 files each; `UploadBatches.swift`): photos and other large files first, then the small files,
+then the `.json` files last. Each batch is an ordinary `POST /v1/datasets` zip, and the batches are combined with
+`/v1/datasets/compose`, at most 16 layers per call, folded in from the front so that `dataset.json` (in the last
+batch) only meets the photos in the final call. The Mac remembers each batch's `datasetId` per worker and folder
+(keyed by the files' names, sizes and dates, and the photo quality) for two weeks, and on a retry skips batches the
+worker still lists in `GET /v1/datasets`. JPEG photos may be re-saved for the upload (*Settings → Uploads to
+workers*, metadata kept). A folder that fits in one batch, or a worker before 1.3.8, gets one zip.
 
 ## 7. Shared compute ("Both" mode)
 

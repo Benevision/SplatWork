@@ -3,7 +3,8 @@
 # SplatWork
 
 **Make, train, view and edit 3D Gaussian splats on your own machines.** Capture on an iPhone, prepare and view on a
-Mac, and train on whichever of your machines are free: your Mac's GPU, other Macs, and Linux or Windows PCs with NVIDIA cards.
+Mac, and train on whichever of your machines are free: your Mac's GPU, other Macs, Linux PCs with NVIDIA, AMD or Intel
+graphics, and Windows PCs with NVIDIA cards.
 Big scenes are split into blocks that train on several devices at once and are merged back into one splat.
 
 Everything runs locally on your network. No cloud account, no uploads to anyone else.
@@ -20,8 +21,8 @@ Everything runs locally on your network. No cloud account, no uploads to anyone 
 | App | Runs on | What it does |
 |---|---|---|
 | **SplatWork** | Mac (Apple silicon, macOS 15+) | The main app. Turns photos, video, 360° video, stereo footage, iPhone captures and COLMAP / Nerfstudio datasets into splats. Native Metal renderer and trainer, editor, exporter, and the coordinator for every other device. |
-| **SplatWork for Linux** | Linux PC with an NVIDIA GPU (Flatpak) | A CUDA worker (gsplat) that the Mac and iPhone send training and processing jobs to, and a full desktop studio of its own: viewer, new projects, editing and export on Linux. |
-| **SplatWork for Windows** | Windows 10 / 11 PC (x64) with an NVIDIA GPU | The same worker and studio as SplatWork for Linux, packaged for Windows (MSI installer). |
+| **SplatWork for Linux** | Linux PC (Flatpak) with an NVIDIA GPU, or AMD / Intel (experimental) | A worker that the Mac and iPhone send training and processing jobs to, and a full desktop studio of its own: viewer, new projects, editing and export on Linux. NVIDIA cards train with gsplat (CUDA), AMD and Intel cards with the built-in Vulkan trainer. Every GPU in the PC, integrated ones included, can train its own job. |
+| **SplatWork for Windows** | Windows 10 / 11 PC (x64) with an NVIDIA GPU | The same worker and studio as SplatWork for Linux, packaged for Windows (MSI installer or portable zip). New in 1.3.0 and tested in CI only so far. |
 | **SplatWork Capture** | iPhone (iOS 18+; LiDAR models record depth) | Records ARKit-posed frames with LiDAR depth and sends them to the Mac. Can also turn its own scans into splats on the phone, or hand the heavy steps to your Mac or PC. |
 | **splatprep** | Mac or Linux (Python) | The processing toolkit inside the apps: learned feature matching and camera solving (COLMAP / GLOMAP), moving-object and sky masks (SAM 2), video splitting and benchmarks. Also usable on its own from the command line. |
 
@@ -38,10 +39,12 @@ Everything runs locally on your network. No cloud account, no uploads to anyone 
   SAM 2 tracking, a mask editor with click-to-select, and a learned skybox so distant sky doesn't turn into haze.
 - **A real trainer on the Mac.** A differentiable Metal rasterizer with analytic gradients, 3DGS-MCMC and adaptive
   densification, anti-aliasing, depth and surface-normal supervision, per-photo colour correction and held-out
-  evaluation. On Linux the same settings drive [gsplat](https://github.com/nerfstudio-project/gsplat).
+  evaluation. On Linux the same settings drive [gsplat](https://github.com/nerfstudio-project/gsplat) or the Vulkan
+  trainer.
 - **Your devices work as one.** Pick the devices for each project; each stage runs where it is fastest, and large
-  scenes train as blocks on all of them. Pause, resume, retry a failed block on another device, and keep watching
-  the live preview from anywhere.
+  scenes train as blocks on all of them. A Linux PC with several GPUs trains one job or block per GPU, and a job
+  started on a slower GPU moves to a faster one when it frees up. Pause, resume, retry a failed block on another
+  device, and keep watching the live preview from anywhere.
 - **Nothing is lost when something stops.** Each processing stage is checkpointed, training saves checkpoints and
   every finished block, and worker jobs carry on while the Mac sleeps. The Projects list shows where each project
   stands and resumes it from any stage.
@@ -60,21 +63,25 @@ The app isn't notarized yet, so the first time, right-click it and choose **Open
 releases (SplatWork → Check for Updates…). A rolling *developer build* with the latest changes is published as a
 pre-release.
 
-**SplatWork for Linux for Linux** (NVIDIA GPU, any distribution with Flatpak): install it from the project's Flatpak
-repository, so updates arrive through `flatpak update`, GNOME Software or KDE Discover:
+**SplatWork for Linux** (any distribution with Flatpak; NVIDIA GPU, or AMD / Intel with the experimental Vulkan
+trainer): install it from the project's Flatpak repository (GPG-signed), so updates arrive through `flatpak update`,
+GNOME Software, KDE Discover or the app's own *Check for Updates…*:
 
 ```bash
 flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
 ```
 
-Open **SplatWork for Linux**; its setup assistant detects your driver and installs a matching PyTorch and gsplat
-(about 2.7 GB, all inside the app's own folder). Then turn the server on. Details:
+Open **SplatWork for Linux**; its setup assistant detects your GPU. On an NVIDIA card it installs a matching PyTorch
+and gsplat (about 2.7 GB, all inside the app's own folder). AMD and Intel cards train with the Vulkan trainer built
+into the app, with no download; an optional PyTorch for ROCm 6.4 (AMD) or XPU (Intel) runs processing on the GPU.
+Then turn the server on. Details:
 [linux/README.md](linux/README.md).
 
 **SplatWork for Windows** (Windows 10 / 11, x64; NVIDIA GPU for training): download the `.msi` from the next
-release and run it. It asks once for administrator rights to allow Macs on Private networks to find the PC. Its setup
-assistant installs PyTorch, CUDA and gsplat like the Linux app does, and it updates itself from new releases. Details
-and the current state: [windows/README.md](windows/README.md).
+release and run it, or unzip the portable `.zip`. The installer asks once for administrator rights to allow Macs on
+Private networks to find the PC. Its setup assistant installs PyTorch, CUDA and gsplat like the Linux app does (RTX 20 to RTX 50 series), and it updates itself
+from new releases. The installer isn't code-signed yet, so SmartScreen warns. It has been tested only in CI, not yet
+on a real PC. Details and the current state: [windows/README.md](windows/README.md).
 
 **SplatWork Capture for iPhone** isn't on the App Store yet. Build it from source with Xcode: see
 [ios/README.md](ios/README.md).
@@ -93,7 +100,8 @@ The [user guide](docs/USER_GUIDE.md) covers capture tips, every step and trouble
 
 **Optional extras:**
 - **A Linux PC with an NVIDIA GPU** running SplatWork for Linux trains several times faster than a laptop and runs the
-  learned camera solvers and masks. The Mac finds it automatically on the local network.
+  learned camera solvers and masks. AMD and Intel GPUs can train too, with the experimental Vulkan trainer. The Mac
+  finds it automatically on the local network.
 - **The Models pack** (Mac, from *Models & Benchmarks*) adds learned feature matchers and segmentation models to the
   Mac itself.
 - **SplatWork Capture** on a LiDAR iPhone gives posed frames and depth, so no camera solving is needed and the scene
@@ -102,13 +110,13 @@ The [user guide](docs/USER_GUIDE.md) covers capture tips, every step and trouble
 ## How it works
 
 ```
- iPhone                         Mac                                        Linux PC (NVIDIA)
+ iPhone                         Mac                                        Linux / Windows PC
  SplatWork Capture              SplatWork                                  SplatWork for Linux
  ─────────────────              ─────────                                  ──────────────
  ARKit frames + LiDAR ─send──▶  source ─▶ frames ─▶ masks ─▶ cameras ─▶ dataset
-                                  │          └───────┴───────┴─ on the worker if chosen ──▶ splatprep (CUDA)
+                                  │          └───────┴───────┴─ on the worker if chosen ──▶ splatprep (GPU)
                                   ▼
-                                training: this Mac (Metal) │ a worker (gsplat) │ blocks on all devices
+                                training: this Mac (Metal) │ a worker (gsplat or Vulkan) │ blocks on all devices
                                   ▼
                                 viewer ─▶ edit ─▶ export (PLY · SPZ · .splat)
 ```
@@ -131,6 +139,7 @@ block training and the iPhone app have had less real-world use. Expect rough edg
 | Mac app | Xcode 16+ / Swift 6 on Apple silicon | `cd mac && ./scripts/build_app.sh && open build/SplatWork.app` |
 | iPhone app | Xcode 26+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) | `cd ios && xcodegen generate && open SplatCapture.xcodeproj` |
 | SplatWork for Linux | `flatpak-builder` (or Python 3.10+ and CUDA for a native install) | `cd linux/flatpak && bash build.sh` |
+| Vulkan trainer (Linux) | CMake, Ninja, a C++17 compiler, Vulkan headers and loader, `glslangValidator` | `cd linux/vktrain && cmake -S . -B build -G Ninja && cmake --build build` |
 | SplatWork for Windows | GitHub Actions (`windows.yml`: MSYS2 GTK 4 + WiX) | see [windows/README.md](windows/README.md) |
 | splatprep | Python 3.10+ | `cd tools && ./install.sh` |
 

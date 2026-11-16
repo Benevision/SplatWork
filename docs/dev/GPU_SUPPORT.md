@@ -1,8 +1,14 @@
 # GPU support in SplatWork for Linux: AMD and Intel
 
 *Developer notes for the roadmap item "support AMD and Intel GPUs on Linux". Status: **detection, setup and
-GPU-accelerated processing done in 1.6.0** (untested on real AMD / Intel hardware); **training is still NVIDIA-only**
-— the training path below needs a decision. This page maps where NVIDIA / CUDA is assumed and the options.*
+GPU-accelerated processing done in 1.6.0** (untested on real AMD / Intel hardware). **Training no longer needs
+NVIDIA:** the portable Vulkan trainer shipped in 1.7.0 (stages 1–3, from the decision of 2026-11-13); 1.7.3–1.7.8 gave
+every GPU its own job slot, measured speeds, GPU leases for processing and moving a job from a slower GPU to a
+faster one; 1.7.9 compares the CUDA and Vulkan trainers in the app. First real-GPU runs on 2026-11-16 on BensPC
+(RTX 4080 + Radeon 610M): a 2-block run with both GPUs training in parallel. The RX 6700 XT test is still to do.
+The history is kept below: [Decision](#decision-2026-11-13-a-portable-vulkan-trainer),
+[Stage 3](#stage-3-status-170-the-trainer-in-the-app), [Job slots per GPU](#job-slots-per-gpu-173) (moving jobs,
+Compare trainers, NVDEC) and [Stages](#stages-each-checked-in-with-the-user).*
 
 ## Done in SplatWork for Linux 1.6.0 (step 1, plus parts of 3 and 4)
 

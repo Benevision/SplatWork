@@ -1,8 +1,9 @@
 # Security policy
 
-SplatWork's apps talk to each other over your local network: the Mac app, SplatWork for Linux and SplatWork Capture
-run small HTTP servers, discover each other with Bonjour, and exchange datasets and results. Reports about anything
-that lets someone on the network (or a crafted file) read, write or run things they shouldn't are very welcome.
+SplatWork's apps talk to each other over your local network: the Mac app, SplatWork for Linux, SplatWork for
+Windows and SplatWork Capture run small HTTP servers, discover each other with Bonjour, and exchange datasets and
+results. Reports about anything that lets someone on the network (or a crafted file) read, write or run things they
+shouldn't are very welcome.
 
 ## Reporting a vulnerability
 
@@ -20,6 +21,14 @@ there before reporting.
 
 ## Hardening tips
 
-- Turn on access tokens for workers that are reachable by other people on your network, and keep SplatWork for Linux's
-  ports (TCP 7878, UDP 5353) closed to the internet.
+- Turn on access tokens for workers that are reachable by other people on your network, and keep the ports of
+  SplatWork for Linux and SplatWork for Windows (TCP 7878, UDP 5353) closed to the internet. The Windows installer
+  opens them for **Private** networks only.
 - Only open captures, datasets and splat files from sources you trust.
+
+## Checking downloads
+
+- Each GitHub release carries `SHA256SUMS.txt` with the SHA-256 checksum of every file in it. SplatWork for Windows
+  checks its update against it before installing.
+- The Linux Flatpak repository is GPG-signed, and `flatpak` checks the signature of every install and update.
+- The Mac app is not notarized yet, and the Windows installer is not code-signed yet (SmartScreen warns).

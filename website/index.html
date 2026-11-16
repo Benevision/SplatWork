@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SplatWork — Gaussian splats on your own machines</title>
-<meta name="description" content="Make, train, view and edit 3D Gaussian splats on your own Mac, iPhone and Linux or Windows GPU machines. Native Metal trainer and renderer, CUDA worker, multi-device block training. Free and open source.">
+<meta name="description" content="Make, train, view and edit 3D Gaussian splats on your own Mac, iPhone and Linux or Windows GPU machines. Native Metal trainer and renderer, workers for NVIDIA, AMD and Intel GPUs, multi-device block training. Free and open source.">
 <meta property="og:title" content="SplatWork">
 <meta property="og:description" content="Make, train, view and edit 3D Gaussian splats on your own Mac, iPhone and Linux or Windows GPU machines.">
 <meta property="og:image" content="images/start-page.png">
@@ -176,7 +176,7 @@
         Source on GitHub
       </a>
     </div>
-    <p class="fineprint">Mac with Apple silicon, macOS 15+ · Linux or Windows with an NVIDIA GPU · iPhone with iOS 18+</p>
+    <p class="fineprint">Mac with Apple silicon, macOS 15+ · Linux with an NVIDIA GPU (AMD or Intel: experimental) · Windows with an NVIDIA GPU · iPhone with iOS 18+</p>
     <div class="shot"><img src="images/start-page.png" width="1600" height="1085" alt="SplatWork on the Mac: create a splat from photos, video, 360° video, an iPhone LiDAR capture, stereo footage or a COLMAP / Nerfstudio dataset"></div>
   </div>
 </header>
@@ -195,8 +195,8 @@
       <div class="card">
         <div class="ico" style="background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="12" rx="2"/><path d="M7 19h10M9 15v4M15 15v4"/><circle cx="8" cy="9" r="1.2" fill="currentColor"/></svg></div>
         <h3>SplatWork for Linux &amp; Windows</h3>
-        <p>A CUDA worker built on gsplat that trains and processes for your Macs, and a full desktop studio of its own on the PC.</p>
-        <span class="runs">Linux (Flatpak) or Windows 10/11 · NVIDIA GPU</span>
+        <p>A worker that trains and processes for your Macs, and a full desktop studio of its own on the PC. NVIDIA cards train with gsplat (CUDA); on Linux, AMD and Intel cards train with a built-in Vulkan trainer (experimental), and every GPU can train its own job.</p>
+        <span class="runs">Linux (Flatpak) · NVIDIA, AMD or Intel GPU<br>Windows 10/11 · NVIDIA GPU</span>
       </div>
       <div class="card">
         <div class="ico" style="background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg></div>
@@ -219,10 +219,10 @@
     <h2>From footage to splat in five steps</h2>
     <p class="sub">A guided flow with presets in Easy mode, and every parameter (each with a built-in explanation) in Advanced.</p>
     <div class="flow">
-      <div class="step"><b>Bring footage</b><span>Photos, video, 360°, stereo, an iPhone scan, or COLMAP / Nerfstudio.</span></div>
+      <div class="step"><b>Bring footage</b><span>Photos, video, 360°, stereo, home video tapes, an iPhone scan, or COLMAP / Nerfstudio.</span></div>
       <div class="step"><b>Pick frames</b><span>Sharpest frames kept, blurry and duplicate shots dropped, 360° cut into views.</span></div>
       <div class="step"><b>Mask & solve</b><span>People, cars and sky masked; every camera placed by structure-from-motion.</span></div>
-      <div class="step"><b>Train</b><span>On this Mac, a Linux GPU, or in blocks across all of them, with a live preview.</span></div>
+      <div class="step"><b>Train</b><span>On this Mac, a Linux or Windows PC, or in blocks across all of them, with a live preview.</span></div>
       <div class="step"><b>Clean & export</b><span>Auto clean, crop, brush; export PLY, SPZ or .splat, screenshots and turntables.</span></div>
     </div>
   </div>
@@ -233,11 +233,11 @@
     <h2>Built for real captures</h2>
     <p class="sub">The things that usually go wrong with splats — floaters, haze, moving people, crashes halfway through a long run — handled by default.</p>
     <div class="grid g3">
-      <div class="card feature"><span class="tag" style="color:var(--accent-2)">Any source</span><h3>Photos to stereo video</h3><p>Photo folders, video, 360° video and photos, side-by-side and spatial stereo with metric scale, LiDAR scans, COLMAP and Nerfstudio.</p></div>
+      <div class="card feature"><span class="tag" style="color:var(--accent-2)">Any source</span><h3>Photos to stereo video</h3><p>Photo folders, video, 360° video and photos, side-by-side and spatial stereo with metric scale, VHS and camcorder tapes (restored first), LiDAR scans, COLMAP and Nerfstudio.</p></div>
       <div class="card feature"><span class="tag" style="color:var(--green)">Cameras</span><h3>Solving that fits the footage</h3><p>Apple Object Capture built in, or COLMAP / GLOMAP with SuperPoint, DISK or ALIKED + LightGlue. Fisheye lenses, drone GPS checks, phone poses refined.</p></div>
       <div class="card feature"><span class="tag" style="color:var(--orange)">Clean scenes</span><h3>People, cars and sky</h3><p>Masks from Apple Vision or open-vocabulary detection with SAM 2 tracking, a click-to-mask editor, and a learned skybox instead of haze.</p></div>
-      <div class="card feature"><span class="tag" style="color:var(--purple)">Native trainer</span><h3>Metal on the Mac, gsplat on Linux</h3><p>A differentiable Metal rasterizer with analytic gradients, 3DGS-MCMC densification, anti-aliasing, depth and flat-surface supervision.</p></div>
-      <div class="card feature"><span class="tag" style="color:var(--teal)">Many machines</span><h3>Block-parallel training</h3><p>Large scenes split into spatial blocks shared by speed and memory, trained at once and merged. Pause, resume, retry a block anywhere.</p></div>
+      <div class="card feature"><span class="tag" style="color:var(--purple)">Native trainer</span><h3>Metal on the Mac, gsplat or Vulkan on the PC</h3><p>A differentiable Metal rasterizer with analytic gradients, 3DGS-MCMC densification, anti-aliasing, depth and flat-surface supervision. The same settings drive gsplat and the Vulkan trainer on Linux.</p></div>
+      <div class="card feature"><span class="tag" style="color:var(--teal)">Many machines</span><h3>Block-parallel training</h3><p>Large scenes split into spatial blocks shared by speed and memory, trained at once and merged. A Linux PC takes one block per GPU. Pause, resume, retry a block anywhere.</p></div>
       <div class="card feature"><span class="tag" style="color:var(--accent-2)">Never start over</span><h3>Resume from any stage</h3><p>Every processing stage is checkpointed, training saves checkpoints and finished blocks, and worker jobs carry on while the Mac sleeps.</p></div>
     </div>
   </div>
@@ -260,7 +260,7 @@
       <div class="arrow">⇄</div>
       <div class="card node">
         <div class="ico" style="background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="12" rx="2"/><path d="M7 19h10M9 15v4M15 15v4"/></svg></div>
-        <h3>Train & process</h3><div class="chips"><span class="chip">CUDA · gsplat</span><span class="chip">SfM & masks</span></div>
+        <h3>Train & process</h3><div class="chips"><span class="chip">gsplat · Vulkan</span><span class="chip">SfM & masks</span></div>
       </div>
     </div>
   </div>
@@ -277,13 +277,13 @@
         <a class="btn primary" id="mac-dl2" href="https://github.com/Benevision/SplatWork/releases/latest">Download .dmg</a>
       </div>
       <div class="card">
-        <h3>SplatWork for Linux for Linux <span class="ver" id="node-ver" hidden></span></h3>
-        <ul><li>Any distribution with Flatpak; NVIDIA GPU for training</li><li>Its setup assistant installs a matching PyTorch and gsplat</li></ul>
+        <h3>SplatWork for Linux <span class="ver" id="node-ver" hidden></span></h3>
+        <ul><li>Any distribution with Flatpak; NVIDIA GPU for training, or AMD / Intel with the experimental Vulkan trainer</li><li>Its setup assistant installs a matching PyTorch and gsplat on NVIDIA; the Vulkan trainer needs no download</li><li>Signed Flatpak repository; updates through <code>flatpak update</code> or the app</li></ul>
         <div class="cmd"><button class="copy" type="button">Copy</button>flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref</div>
       </div>
       <div class="card">
         <h3>SplatWork for Windows <span class="ver" id="win-ver" hidden></span></h3>
-        <ul><li>Windows 10 or 11, x64; NVIDIA GPU for training</li><li>Its setup assistant installs a matching PyTorch and gsplat</li><li id="win-note">Not code-signed yet: if SmartScreen warns, choose <b>More info</b> → <b>Run anyway</b></li></ul>
+        <ul><li>Windows 10 or 11, x64; NVIDIA GPU for training (RTX 20 to RTX 50)</li><li>Its setup assistant installs a matching PyTorch and gsplat</li><li>New: tested in CI only so far, not yet on a real PC</li><li id="win-note">Not code-signed yet: if SmartScreen warns, choose <b>More info</b> → <b>Run anyway</b></li></ul>
         <a class="btn primary" id="win-dl" href="https://github.com/Benevision/SplatWork/releases/latest">Download .msi</a>
       </div>
       <div class="card">

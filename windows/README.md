@@ -37,10 +37,13 @@ Updates: SplatWork checks the latest release. **Update…** downloads the new in
 - **NVIDIA:** training and processing with gsplat / CUDA, like SplatWork for Linux. With a driver for CUDA 12.8
   (570 or newer), Set Up picks PyTorch 2.7 + CUDA 12.8 with gsplat 1.6, which covers RTX 20 to RTX 50 series cards.
   That gsplat build is compiled for Windows by SplatWork's own CI (`gsplat-windows-wheel.yml`) and published next
-  to the Linux one. With older drivers, Set Up picks PyTorch 2.4 with CUDA 12.4, 12.1 or 11.8 and gsplat 1.5.3's
-  prebuilt Windows wheels. Neither has been tried on a real GPU yet, and RTX 50-series cards are untested.
-- **AMD and Intel:** the viewer, editing and processing work, and processing runs on the CPU. Training comes with
-  the shared Vulkan trainer that is in development ([GPU_SUPPORT.md](../docs/dev/GPU_SUPPORT.md)).
+  to the Linux one at <https://benevision.github.io/SplatWork/wheels/>
+  (`gsplat-1.6.0+pt27cu128-cp310-cp310-win_amd64.whl`). With older drivers, Set Up picks PyTorch 2.4 with CUDA
+  12.4, 12.1 or 11.8 and gsplat 1.5.3's prebuilt Windows wheels. Neither has been tried on a real GPU yet, and
+  RTX 50-series cards are untested.
+- **AMD and Intel:** the viewer, editing and processing work, and processing runs on the CPU. There is no training
+  on these cards yet. The Vulkan trainer that trains on AMD and Intel GPUs ships in SplatWork for Linux (1.7.0 and
+  later, experimental) but is not in the Windows bundle yet ([GPU_SUPPORT.md](../docs/dev/GPU_SUPPORT.md)).
 - The viewer needs OpenGL 4.3. NVIDIA, AMD and Intel drivers provide it; Windows' basic display driver doesn't.
 
 ## Building

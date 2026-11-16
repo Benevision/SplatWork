@@ -6,6 +6,31 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+## 1.3.0 — 2026-11-16
+
+SplatWork 1.3.0 for Mac, SplatWork for Linux 1.7.10, and the first SplatWork for Windows. SplatWork Capture is
+unchanged (1.2).
+
+### Highlights
+- **SplatWork for Windows (new):** the Linux app's worker and studio for Windows 10 / 11 PCs with an NVIDIA GPU,
+  RTX 50 cards included, as an MSI installer or a portable zip. Tested in CI only so far, not yet on a real PC.
+- **AMD and Intel graphics on Linux (experimental):** recognised by the app, with ROCm / XPU processing runtimes and
+  a new Vulkan trainer. On Linux every GPU can train its own job, integrated ones included. A slower GPU starts
+  waiting jobs, which move to a faster one when it frees up. *Measure GPU speed* and *Compare trainers* (CUDA vs
+  Vulkan) are built in.
+- **Home video (VHS, camcorder tapes):** restores old tape footage (deinterlacing, noise, dropouts, colour) and picks
+  the clip best suited to a splat.
+- **Drone surveys that hold together:** GPS-guided matching, a re-solve held to GPS when the fast solve folds the
+  scene or places too few photos, take-off shots left out, and a GPS check before training.
+- **A new preparation screen on the Mac** with a step timeline, live counters and previews of masks, sky and
+  cameras. Uploads to workers are smaller, batched and resumable.
+- **Safer colour correction:** training notices when per-photo colour correction takes over the scene's colour and
+  resets it.
+- **SplatWork for Linux checks for and installs updates itself.** Its Flatpak repository is now signed: see the
+  install notes in linux/README.md.
+
+### Details
+
 - **Block runs use every GPU on a Linux worker.** A worker with several training GPUs (SplatWork for Linux 1.7.8 or
   newer, e.g. an RTX 4080 with an integrated Radeon) now gets as many blocks at once as it has GPUs. Before, the Mac
   sent it one block at a time. The worker decides where each block runs and moves a block to a faster GPU when one

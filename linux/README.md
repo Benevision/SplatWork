@@ -3,16 +3,18 @@
 SplatWork for Linux is the Linux member of the SplatWork suite. It does two jobs in one app:
 
 - **A GPU worker.** SplatWork on the Mac (and SplatWork Capture on the iPhone) send it training and dataset
-  processing jobs over the local network. Training uses [gsplat](https://github.com/nerfstudio-project/gsplat), the
-  CUDA rasterizer from nerfstudio; processing uses [splatprep](../tools/README.md) for video splitting, learned
-  camera solving and masks.
+  processing jobs over the local network. On NVIDIA cards training uses
+  [gsplat](https://github.com/nerfstudio-project/gsplat), the CUDA rasterizer from nerfstudio; on AMD and Intel
+  cards it uses SplatWork's own Vulkan trainer (experimental, built into the app). Processing uses
+  [splatprep](../tools/README.md) for video splitting, learned camera solving and masks.
 - **A desktop studio.** A complete SplatWork for Linux: a viewer (PLY, compressed PLY, `.splat`, `.spz`, learned
   skybox), New Project (photos, video, 360° video and photos, stereo footage, iPhone captures, COLMAP, Nerfstudio),
   editing (brush, crop, thresholds, Auto clean, mask editor), export and turntable videos, an iPhone Inbox, and
   training on this PC or across several machines.
 
-Everything GPU-heavy runs as jobs of one server with one queue per GPU, so work started at the PC and work sent from
-a Mac share the GPU fairly (the person at the PC goes first among waiting jobs; nothing running is interrupted).
+Everything GPU-heavy runs as jobs of one server with one job slot per GPU, integrated GPUs included, so work started
+at the PC and work sent from a Mac share the GPUs fairly (the person at the PC goes first among waiting jobs; nothing
+running is interrupted).
 Projects are saved in `~/Documents/SplatWork`, in the same layout as the Mac, so a project opens on either.
 
 ```
@@ -26,8 +28,10 @@ SplatWork (Mac) ──Bonjour _splatworker._tcp──▶ discovers the worker
 The API is documented in [docs/PROTOCOL.md](../docs/PROTOCOL.md) §2–§4, §6 and §7. How the studio is built:
 [docs/dev/LINUX_STUDIO.md](../docs/dev/LINUX_STUDIO.md).
 
-**Requirements:** a Linux desktop with Flatpak, and an NVIDIA GPU with 8 GB or more of memory for training
-(24 GB for very large scenes). Without an NVIDIA GPU it can still view, edit and process datasets.
+**Requirements:** a Linux desktop with Flatpak, and a GPU with 8 GB or more of memory for training (24 GB for very
+large scenes). NVIDIA cards (GTX 10-series to RTX 50-series) train with gsplat. AMD and Intel cards, integrated ones
+included, train with the Vulkan trainer, which is experimental: it has not yet been compared with gsplat on real
+GPUs. Without a usable GPU it can still view, edit and process datasets.
 
 ## Install
 
@@ -53,18 +57,21 @@ A shared single-file bundle installs with `flatpak install --user SplatWorker-<v
 
 Open **SplatWork for Linux** from the app grid. On first launch the setup assistant runs:
 
-1. It finds your NVIDIA GPU and driver through NVML / `nvidia-smi`, and reads the highest CUDA version
-   the driver supports.
-2. It lists what it will download and why, with sizes. That is about 2.7 GB for a GPU setup, and about
+1. It finds your GPUs: an NVIDIA GPU and driver through NVML / `nvidia-smi` (with the highest CUDA version
+   the driver supports), and AMD and Intel cards from the system's PCI devices and their Vulkan driver.
+2. It lists what it will download and why, with sizes. That is about 2.7 GB for an NVIDIA setup, and about
    0.3 GB for the processing-only setup.
-3. It installs a private Python 3.10, then the PyTorch CUDA wheel for your driver, then gsplat with
-   prebuilt kernels, the worker's libraries and splatprep (optional). Everything goes under
+3. It installs a private Python 3.10, then the PyTorch wheel for your GPU (CUDA for NVIDIA, ROCm for a
+   dedicated AMD card, XPU for an Intel Arc card, the CPU build otherwise), then gsplat with prebuilt kernels
+   (NVIDIA only), the worker's libraries and splatprep (optional). Everything goes under
    `~/.var/app/com.example.SplatWorker/data/splatworker/`. You get a real progress bar, plus Cancel and
    Retry. Finished downloads are cached, so Retry continues from the step that failed.
 4. It checks that PyTorch can see the GPU, then offers to start the server.
 
-Without an NVIDIA GPU, the assistant explains that training is not possible on the CPU. It then offers
-the processing-only runtime, so the Mac can still send dataset processing jobs (§6).
+On an AMD or Intel card, the assistant says that the card trains with the Vulkan trainer (experimental). That
+trainer needs no download; the processing runtime adds dataset preparation, on the GPU through ROCm or XPU where
+it can and on the CPU otherwise. Without any usable GPU, the assistant explains that training is not possible on
+the CPU and offers the processing-only runtime, so the Mac can still send dataset processing jobs (§6).
 
 After setup, the **Queue & Worker** page holds the worker side of the app:
 
@@ -76,10 +83,26 @@ After setup, the **Queue & Worker** page holds the worker side of the app:
   delete, log, and "save result" buttons (saves to Downloads).
 * **Log**: the server's output.
 * **Connect**: step-by-step instructions for SplatWork on the Mac, firewall commands and checks.
-* **Settings** (Ctrl+,): port, Bonjour name, token on/off, data folder, maximum upload size, which GPUs
-  to use, start the server when the app opens, keep running when the window is closed, start at login
-  (through the XDG Background portal), log detail, and repair/remove the GPU runtime. Each setting is
-  explained right under it.
+* **Settings** (Ctrl+,): port, Bonjour name, token on/off, data folder, maximum upload size, start the
+  server when the app opens, keep running when the window is closed, start at login (through the XDG
+  Background portal), install updates automatically, log detail, and repair/remove the GPU runtime. Each
+  setting is explained right under it. Also:
+  * **GPUs**: *Use all GPUs*, or tick the GPUs to use. Each ticked GPU trains one job at a time. An
+    integrated GPU beside a faster card starts unticked. *Measure GPU speed* trains the benchmark scene on
+    each GPU for about a minute with the Vulkan trainer (`splatworker measure-gpus` does the same); a GPU
+    under a quarter of the fastest counts as slower. Each slower GPU has a choice: *Only when faster GPUs
+    are busy* (default) or *Always use, like any other GPU*. *Move jobs to a faster GPU when one is free*
+    lets a job a slower GPU started pause and continue on the faster GPU from the same step (Vulkan trainer
+    on both).
+  * **Training**: *Trainer* (Automatic, gsplat (NVIDIA), Vulkan (experimental); Automatic uses gsplat on
+    NVIDIA and the Vulkan trainer on AMD and Intel), *Decode video on* (Automatic uses the NVIDIA GPU's
+    video decoder, NVDEC, when it gives the same pictures as the CPU; or CPU), and *Processing jobs at once*
+    (1 by default: processing runs on the CPU and takes the GPU only for its GPU steps).
+  * **Startup and background → Check for updates**: *Check Now*, also in the main menu as **Check for
+    Updates…**.
+* **Models & Benchmarks → Compare trainers** trains the benchmark scene on the same GPU with gsplat and then
+  with the Vulkan trainer, and shows speed, peak GPU memory, splats, held-out PSNR and SSIM side by side
+  (`splatworker benchmark --compare-trainers`).
 
 ### Headless / without the window
 
@@ -98,14 +121,22 @@ For a systemd **user** service, put `ExecStart=/usr/bin/flatpak run com.example.
 `~/.config/systemd/user/splatworker.service`. Then run `loginctl enable-linger $USER` so it runs without a
 login. The native `splatworker serve` / `install.sh` / Docker paths below are unchanged.
 
-### GPU runtimes (gsplat 1.6 and 1.5.3)
+### GPU runtimes and trainers
 
-The setup assistant picks the runtime from your NVIDIA driver and GPU:
+The setup assistant picks the runtime from your GPU and driver:
 
-| Driver | GPUs | Runtime |
+| GPU and driver | Runtime | Trains with |
 |---|---|---|
-| 570+ (CUDA 12.8) | RTX 20-series → RTX 50-series (compute 7.5–12.0) | PyTorch 2.7.1 + **gsplat 1.6 development build**, compiled by this repository's GitHub Actions from the commit in `flatpak/gsplat-pin.env` |
-| 520–569 | GTX 10-series and newer (not RTX 50) | PyTorch 2.4.1 + gsplat 1.5.3 (official prebuilt wheels) |
+| NVIDIA, driver 570+ (CUDA 12.8): RTX 20-series → RTX 50-series (compute 7.5–12.0) | `cu128`: PyTorch 2.7.1 + **gsplat 1.6 development build**, compiled by this repository's GitHub Actions from the commit in `flatpak/gsplat-pin.env` | gsplat |
+| NVIDIA, driver 520–569: GTX 10-series and newer (not RTX 50) | `cu124` / `cu121` / `cu118`: PyTorch 2.4.1 + gsplat 1.5.3 (official prebuilt wheels) | gsplat |
+| AMD, dedicated card | `rocm6.4`: PyTorch 2.8 for ROCm 6.4, processing only | Vulkan trainer |
+| Intel Arc | `xpu`: PyTorch 2.7.1 for Intel GPUs, processing only | Vulkan trainer |
+| Integrated GPU, or no GPU | CPU build, processing only | Vulkan trainer (integrated GPU), or none |
+
+The Vulkan trainer (`splatwork-vk-train`, from `vktrain/`) is built into the Flatpak and needs no download. It
+reads the same training settings as gsplat. On NVIDIA it can be chosen in *Settings → Training → Trainer*. It is
+experimental: so far it has been checked against gsplat only on Mesa's software Vulkan driver. Auto clean still
+needs gsplat. More in [docs/dev/GPU_SUPPORT.md](../docs/dev/GPU_SUPPORT.md).
 
 gsplat 1.6 isn't released yet, so the pinned development commit is compiled once per pin (CI caches it) and
 published next to the Flatpak at `…/wheels/`. To try a newer gsplat, change `GSPLAT_COMMIT` in
@@ -127,9 +158,8 @@ published next to the Flatpak at `…/wheels/`. To try a newer gsplat, change `G
 * **Driver → wheel**: it picks the newest build that is not newer than the driver's CUDA version: ≥ 12.4
   → `cu124`, 12.1–12.3 → `cu121`, 11.8–12.0 → `cu118`. You can override it in the assistant's
   "Advanced" section.
-* **Limitation**: PyTorch 2.4 has no kernels for Blackwell GPUs (RTX 50xx, compute capability 10/12),
-  and there is no prebuilt gsplat for newer PyTorch. The assistant detects these GPUs and offers only
-  processing. Use the native `install.sh` for them: it can compile gsplat with the CUDA toolkit.
+* **RTX 50-series (Blackwell)**: PyTorch 2.4 has no kernels for them, so they need the `cu128` runtime
+  (driver 570 or newer). With an older driver the assistant asks you to update it.
 
 ### Network behaviour
 
@@ -162,6 +192,8 @@ shared through the file chooser portal.
 * **Setup fails with a network or disk error**: press Retry. Downloads resume from the failed step. The
   full log is in `~/.var/app/com.example.SplatWorker/data/splatworker/install.log`. The runtime needs
   about 6 GB of free space.
+* **`flatpak update` says "Can't pull from untrusted non-gpg verified remote"**: a system-wide install made
+  from the old unsigned ref. Reinstall for your user, as in [Updates from GitHub](#updates-from-github-recommended).
 * **Start over**: Settings → GPU runtime → Remove, then Open Setup. To wipe everything, including
   jobs and settings: `flatpak uninstall --delete-data com.example.SplatWorker`.
 
@@ -171,21 +203,36 @@ Every push to `main` that touches `linux/` or `tools/` is built by GitHub Action
 (`.github/workflows/splat-worker-flatpak.yml`) and published as a Flatpak repository on GitHub Pages.
 Install from there once and updates arrive like any other Flatpak app: GNOME Software / KDE Discover
 offer them, or run `flatpak update`. From 1.3.16 the app also updates itself: it installs a newly published
-version through the Flatpak portal and restarts into it once no job is running or queued (Preferences →
-Install updates automatically; off = a banner with Update / Restart buttons). Headless installs
-(`--headless`, systemd) don't self-update: use `flatpak update` (e.g. from a timer).
+version through the Flatpak portal and restarts into it once no job is running or queued (Settings →
+Startup and background → Install updates automatically; off = a banner with Update / Restart buttons).
+**Check for Updates…** (main menu, or *Check Now* in the same Settings group) checks at once; *Update and
+Restart* installs a newer version straight away, and with jobs running or queued it offers *Update After
+Jobs* or *Stop Jobs and Update*. Headless installs (`--headless`, systemd) don't self-update: use
+`flatpak update` (e.g. from a timer).
 
 ```bash
 # one time: remove a locally built copy, then install from the published repository
 flatpak uninstall --user com.example.SplatWorker
 flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
-# if the repository is unsigned (no FLATPAK_GPG_PRIVATE_KEY secret), add the remote first instead:
-flatpak remote-add --user --no-gpg-verify splatworker https://benevision.github.io/SplatWork/flatpak/repo/
-flatpak install --user splatworker com.example.SplatWorker
 ```
 
+**Signed repository.** From 2026-11-16 the repository is signed with GPG, and the `.flatpakref` carries the
+public key, so Flatpak checks every update.
+
+* Installs made earlier from the unsigned ref keep updating as before: their remote has signature checking
+  turned off. To turn it on, uninstall and install again from the ref (the commands above).
+* A **system-wide** install made from the old unsigned ref fails `flatpak update` with "Can't pull from
+  untrusted non-gpg verified remote". Remove it and install for your user:
+  ```bash
+  flatpak uninstall --system com.example.SplatWorker
+  flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
+  ```
+* A fork that publishes without a signing key (no `FLATPAK_GPG_PRIVATE_KEY` secret) gets an unsigned
+  repository. Add its remote with `flatpak remote-add --user --no-gpg-verify splatworker <fork>/flatpak/repo/`,
+  then `flatpak install --user splatworker com.example.SplatWorker`.
+
 Settings, the token and the downloaded GPU runtime live in `~/.var/app/com.example.SplatWorker` and are
-kept across updates and reinstalls. Repository setup (one time): GitHub → Settings → Pages → Source:
+kept across updates and reinstalls, including the reinstalls above. Repository setup (one time): GitHub → Settings → Pages → Source:
 "GitHub Actions"; GitHub Pages needs a public repository on free plans.
 
 ### Building and updating the Flatpak
@@ -200,7 +247,9 @@ kept across updates and reinstalls. Repository setup (one time): GitHub → Sett
 ## Requirements
 
 * Linux with an NVIDIA GPU, a recent driver (`nvidia-smi` works), and 8 GB+ VRAM. Use 24 GB for large
-  scenes with `maxGaussians` set to 3M or more.
+  scenes with `maxGaussians` set to 3M or more. The native install sets up gsplat (CUDA) only. To train on
+  AMD or Intel without the Flatpak, build the Vulkan trainer in `vktrain/` with CMake and put
+  `splatwork-vk-train` on `PATH` (or point `SPLATWORK_VK_TRAIN` at it).
 * Python 3.10+.
 * The CUDA toolkit (`nvcc`). You need it only if no prebuilt gsplat wheel matches your torch/CUDA
   version: gsplat then compiles its kernels once on first use. fused-ssim always needs it.
@@ -240,11 +289,18 @@ splatworker serve --port 7878 --data-dir ~/splatworker-data \
                   --token-file ~/.config/splatworker/token --name "Render Box"
 ```
 
-Options: `--gpus 0,1` runs one job per listed GPU at a time; the default is every visible GPU.
+Options: `--gpus 0,1` runs one job per listed GPU at a time. It takes CUDA indices and `vk:<PCI address>`
+keys for GPUs only the Vulkan trainer can use (AMD, Intel, integrated), e.g. `--gpus 0,vk:0000:c5:00.0`;
+`splatworker info` lists the keys. The default is every GPU except an integrated one beside a faster card.
+`--trainer auto|gsplat|vulkan` picks the trainer (default `auto`). `--gpu-mode vk:0000:11:00.0=always` uses a
+slower GPU like any other (default `auto`: only while faster GPUs are busy), and `--no-migrate` keeps jobs where
+they started. `--video-decode auto|cpu` sets where processing decodes video, and `--cpu-jobs N` how many
+processing jobs run at once (default 1).
 `--no-mdns` turns off Bonjour, and `--advertise-ip 192.168.1.20` sets the advertised address.
-`--max-upload-gb` and `--max-extracted-gb` cap upload sizes (defaults 20 and 40). Each flag also has an
+`--max-upload-gb` and `--max-extracted-gb` cap upload sizes (defaults 20 and 40). Most flags also have an
 environment variable: `SPLATWORKER_TOKEN`, `SPLATWORKER_TOKEN_FILE`, `SPLATWORKER_DATA_DIR`,
-`SPLATWORKER_PORT`, `SPLATWORKER_NAME`, `SPLATWORKER_GPUS`.
+`SPLATWORKER_PORT`, `SPLATWORKER_NAME`, `SPLATWORKER_GPUS`, `SPLATWORKER_TRAINER`, `SPLATWORKER_VIDEO_DECODE`,
+`SPLATWORKER_CPU_JOBS`.
 
 ### As a service
 
@@ -300,17 +356,18 @@ isolation"). In those cases, add the worker in SplatWork by IP and port.
 
 ## API summary
 
-All endpoints need `Authorization: Bearer <token>` when a token is configured; without it they return
+Every field is described in [docs/PROTOCOL.md](../docs/PROTOCOL.md); this is a summary. All endpoints need
+`Authorization: Bearer <token>` when a token is configured; without it they return
 `401 {"error": ...}`. All errors are `{"error": "message"}`.
 
 | Method & path | Notes |
 |---|---|
-| `GET /v1/info` | name, version, gpus, backend, busy, queueLength, capabilities (`train` if torch+gsplat import, `process` if splatprep imports), models |
+| `GET /v1/info` | name, version, workerVersion, gpus, backend, busy, queueLength, capabilities (`train` if a trainer is available, `process` if splatprep imports), models. Newer workers also report `adapters` (every graphics card), `trainer` (which trainer trains), `trainers` (the ones a job may ask for), `slots` (one per GPU, with measured speed, `slower`, `userChoice`), `vulkanDevices` (every Vulkan GPU's measured speed) and `cpuJobs` (the processing pool) |
 | `POST /v1/datasets` | raw zip. A dataset root must contain `dataset.json` (training) or `images/` (processing). It can sit at the zip root or inside one top-level folder. Returns `{"datasetId"}` |
 | `GET /v1/datasets`, `DELETE /v1/datasets/{id}` | extras for disk management (`409` while a job uses it) |
-| `POST /v1/jobs` | `{"datasetId","name","config":{TrainingConfig}}` returns `{"jobId"}` |
+| `POST /v1/jobs` | `{"datasetId","name","config":{TrainingConfig}}` returns `{"jobId"}`. Optional `"slot"` (a `/v1/info` slot id) and `"trainer"` (`gsplat` or `vulkan`) |
 | `POST /v1/process` | `{"datasetId","request":{ProcessingRequest}}` returns `{"jobId"}` (§6) |
-| `GET /v1/jobs`, `GET /v1/jobs/{id}` | JobStatus. `kind` is `train` or `process`. Extra fields: `datasetId`, `createdAt`, `gpu` |
+| `GET /v1/jobs`, `GET /v1/jobs/{id}` | JobStatus. `kind` is `train` or `process`. Extra fields include `datasetId`, `createdAt`, `gpu`, `slot`, `trainer`, `evalSsim` and `resource` (`cpu`, `gpu` or `waiting-gpu` for processing jobs) |
 | `POST /v1/jobs/{id}/cancel` | A queued job is cancelled at once. A running job keeps its state with `message: "cancelling"` until the trainer stops, then becomes `cancelled` |
 | `DELETE /v1/jobs/{id}` | `204`; cancels the job if it is running, then deletes its files |
 | `GET /v1/jobs/{id}/preview.ply` | latest snapshot (`404` before the first one), header `X-Preview-Step` |
@@ -352,8 +409,10 @@ The output PLY is the INRIA 3DGS layout: `x y z nx ny nz f_dc_0..2 f_rest_0..44 
 rot_0..3`. `f_rest` is channel-major (as in the original 3DGS export), opacity is a logit, scale is a
 log value, and the rotation is a normalised `w,x,y,z` quaternion. Lower SH degrees are zero-padded.
 
-Each job runs in its own spawned Python process pinned to one GPU. CUDA memory goes back to the driver
-after every job, and a crash in the trainer doesn't take the API down.
+Each job runs in its own spawned Python process pinned to one GPU (with the Vulkan trainer, a
+`splatwork-vk-train` process). GPU memory goes back to the driver after every job, and a crash in the trainer
+doesn't take the API down. The Vulkan trainer reads the same TrainingConfig; how it maps the settings is in
+[docs/dev/GPU_SUPPORT.md](../docs/dev/GPU_SUPPORT.md).
 
 ## Firewall
 

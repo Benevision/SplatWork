@@ -1,19 +1,19 @@
 # SplatWork — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 119 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 121 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
 - [Viewer](#viewer) — 20 settings
 - [Editing](#editing) — 7 settings
-- [Sources & frame extraction](#sources--frame-extraction) — 17 settings
+- [Sources & frame extraction](#sources--frame-extraction) — 18 settings
 - [Camera solving (SfM)](#camera-solving-sfm) — 10 settings
 - [Masking](#masking) — 4 settings
 - [Training — basics](#training--basics) — 9 settings
 - [Training — densification](#training--densification) — 13 settings
 - [Training — learning rates](#training--learning-rates) — 5 settings
 - [Training — losses & regularisation](#training--losses--regularisation) — 20 settings
-- [Compute & networking](#compute--networking) — 9 settings
+- [Compute & networking](#compute--networking) — 10 settings
 - [Export](#export) — 5 settings
 
 ## Viewer
@@ -490,6 +490,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 119 sett
 | [HDR tone mapping](#hdr-tone-mapping) | Automatic | – | Advanced |
 | [Hold out every Nth image](#hold-out-every-nth-image) | 25 (Easy) / 8 (Advanced) | 0–50 | Advanced |
 | [Use photo locations (GPS)](#use-photo-locations-gps) | On | – | Easy |
+| [Leave out take-off and landing shots](#leave-out-take-off-and-landing-shots) | On | – | Easy |
 | [Aerial settings](#aerial-settings) | On for drone footage | – | Easy |
 
 ### Maximum image size
@@ -738,6 +739,23 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 119 sett
 - It is used for any photos that have locations, phone or drone.
 - Off: the imported photos carry no location at all, so the project folder doesn't reveal where they were taken.
 - Apple Object Capture doesn't use locations.
+
+### Leave out take-off and landing shots
+
+> Drop drone photos taken near the ground before the cameras are solved.
+
+| | |
+|---|---|
+| **Default** | On |
+| **Mode** | Easy |
+| **ID** | `source.skipTakeoff` |
+
+**How it works.** A drone usually takes a few photos while climbing away or coming in to land: low, looking at the horizon or the launch spot.
+
+- They rarely match the survey and can pull the camera solve apart.
+- With this on, photos taken below 5 m above take-off (or below 30 % of the flight's usual height, whichever is higher) are left out before solving, when most of the flight is well above that.
+- It needs the height above take-off DJI stores in each photo, so it does nothing for phone photos.
+- Separately, after solving, the few cameras far from their GPS position are always left out when the rest of the solve matches GPS.
 
 ### Aerial settings
 
@@ -1804,6 +1822,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 119 sett
 | [Benchmark](#benchmark) | – | – | Easy |
 | [Linux GPU workers](#linux-gpu-workers) | None | – | Easy |
 | [Work placement](#work-placement) | This Mac | – | Easy |
+| [Upload size](#upload-size) | Standard | – | Advanced |
 | [Split videos on the worker](#split-videos-on-the-worker) | On | – | Advanced |
 | [Split into blocks above](#split-into-blocks-above) | 400 images | – | Advanced |
 | [Block overlap](#block-overlap) | 15 % | 5–40 % | Advanced |
@@ -1854,6 +1873,24 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 119 sett
 | **ID** | `net.placement` |
 
 **How it works.** Both: preparation that only exists on the Mac (Object Capture, Apple Vision masks) stays local, learned feature matching and training go to the fastest device, and scenes bigger than the block threshold are split into blocks trained on both machines at once.
+
+### Upload size
+
+> How photos are re-saved for sending to a worker: Standard (JPEG 90), Compact (JPEG 85) or Original.
+
+| | |
+|---|---|
+| **Default** | Standard |
+| **Mode** | Advanced |
+| **ID** | `net.uploadQuality` |
+
+**How it works.** Only the copy sent to a Linux worker is re-saved; the project keeps its full-quality photos, and the photos' location and drone height go along unchanged.
+
+- On a 1,229-photo drone survey (5.6 GB) Standard sends 75 % of the bytes and Compact 54 %, differing from the originals by 39 and 36 dB PSNR — far below what a splat reproduces (about 20–25 dB), so training results don't change.
+- Photos that wouldn't get smaller are sent as they are.
+- Uploads go in batches of about 200 MB that the worker combines, so an interrupted upload resumes with the batches it is missing.
+- Videos are always sent as they are: they are already far more compressed than their frames would be.
+- In Settings → Uploads to workers.
 
 ### Split videos on the worker
 

@@ -5,7 +5,7 @@ SplatWork has four parts that share the formats and protocols in [PROTOCOL.md](P
 | Part | Folder | Language | Role |
 |---|---|---|---|
 | **SplatWork** | `mac/` | Swift, SwiftUI, Metal | Coordinator: viewer, editor, dataset preparation, Metal trainer, client for workers, receiver for iPhone captures |
-| **SplatWork for Linux** | `linux/` | Python, FastAPI, gsplat, GTK 4 | Optional CUDA server for training and processing jobs, packaged as a Flatpak |
+| **SplatWork for Linux** | `linux/` | Python, FastAPI, gsplat, C++ / Vulkan, GTK 4 | Optional GPU server for training and processing jobs (gsplat on NVIDIA, or the Vulkan trainer on any GPU), packaged as a Flatpak; the same app is built for Windows (`windows/`, MSI) |
 | **splatprep** | `tools/splatprep/` | Python, PyTorch | Learned SfM, masks, video frames and benchmarks. Runs on the Mac (MPS, Models pack) and inside the worker (CUDA) |
 | **SplatWork Capture** | `ios/` | Swift, ARKit | iPhone capture of posed frames, LiDAR depth and points |
 
@@ -18,7 +18,7 @@ SplatWork has four parts that share the formats and protocols in [PROTOCOL.md](P
  .splatcapture bundle ──POST /v1/captures─▶  ingest ─▶ masks ─▶ poses ─▶ dataset/      JobManager (queue, 1 job/GPU)
    (Bonjour _splatcapture._tcp)              │         │        │                      SubprocessBackend (spawn)
                                              │         └────────┴──── /v1/process ───▶   ├─ splatprep (frames, masks, sfm)
-                                             │   (video ─ /v1/datasets/file ─────────▶)   └─ trainer.py (gsplat)
+                                             │   (video ─ /v1/datasets/file ─────────▶)   └─ trainer.py (gsplat) / vktrain (Vulkan)
                                              ▼                                         datasets/<id>  jobs/<id>
                                            TrainingSession                                  ▲
                                              ├─ MetalTrainer (This Mac)                     │
@@ -173,7 +173,7 @@ The CLI's `--eval` reports held-out PSNR, per view if asked; the measured result
 ## Linux worker (`linux/`)
 
 - **`server.py`**: the FastAPI app.
-  - **`JobManager`** keeps a FIFO queue and runs one job per configured GPU. Jobs persist in `jobs/<id>/job.json`; after a worker restart, queued jobs are re-queued and running ones are marked failed.
+  - **`JobManager`** keeps a priority queue and runs one job per GPU slot (`slots.py`, below). Jobs persist in `jobs/<id>/job.json`; after a worker restart, queued jobs are re-queued and running ones are marked failed (paused jobs: PROTOCOL §4).
   - Datasets live in `datasets/<id>`. Uploads go through `safezip` (path, size, ratio and symlink checks).
   - Processing outputs are adopted as datasets (`_adopt_output_as_dataset`), and `_compose_dataset` hard-links layers together.
 - **`backends.py`**: `SubprocessBackend` spawns a fresh Python process per job (`multiprocessing` spawn), pinned to one GPU. CUDA memory is returned after each job, and a trainer crash cannot take the API down. It reports the capabilities `train`, `process` and `frames`.
@@ -186,6 +186,12 @@ The CLI's `--eval` reports held-out PSNR, per view if asked; the measured result
   - experimental `PoseRefiner`;
   - region and `cameraIds` handling.
   - Outputs are `preview.splat` (≤ 400 k most visible splats), `result.ply` with `comment splatstudio_up`, and train and held-out PSNR reported separately.
+- **`vktrain.py`** runs the **Vulkan trainer**, `splatwork-vk-train`: a native C++17 / Vulkan 1.2 program built from `linux/vktrain` (GLSL compute shaders compiled to SPIR-V when the app is built), needing no PyTorch. It works on any GPU with a Vulkan 1.2 driver (AMD through RADV, Intel through ANV, NVIDIA too) and is still marked experimental. A job runs it like `trainer.py`: one process per job, its JSON lines turned into the same status messages, pause / checkpoint / cancel passed on stdin, the same output files (a paused job's state is `resume.vkstate`). The trainer is chosen by `serve --trainer` (Preferences → Trainer): `auto` (default) keeps gsplat on a computer with an NVIDIA card and otherwise uses Vulkan when it finds a GPU; a train job may ask for either (`"trainer"`, 1.7.9, also behind *Compare trainers*). See [dev/GPU_SUPPORT.md](dev/GPU_SUPPORT.md).
+- **`slots.py`**: one job slot per GPU (1.7.3). A CUDA GPU (`cuda:N`) takes every kind of job; a GPU only the Vulkan trainer can use (`vk:<pci address>`, e.g. an AMD card or an integrated GPU) takes train jobs only. A slot measured under a quarter of the fastest one's speed (or an unmeasured integrated GPU beside another) is *slower*: since 1.7.8 it starts a waiting train job, block jobs too, only while every faster slot is busy, unless the user set it to *always*.
+- **`gpuspeed.py`**: measured speeds instead of guesses (1.7.5). Each Vulkan device trains the standard benchmark scene for a fixed window (a smaller scene when it doesn't fit) and the steps/s, scene size and peak memory are cached per device and driver in `gpu-speeds.json` (*Settings → GPUs → Measure GPU speed*, `splatworker measure-gpus`). They decide which slots are slower and appear in `/v1/info` `"slots"` and `"vulkanDevices"`.
+- **Moving jobs between slots** (1.7.8, `JobManager`; off with `serve --no-migrate`): when a faster slot frees up while a Vulkan training job runs on a slower one, the job saves its state (as for a pause), goes back to the front of the queue for the faster slot and resumes there from the same step, with the same jobId.
+- **`gpulease.py`**: GPU leases for processing (1.7.6). Processing jobs run in a CPU pool (`serve --cpu-jobs`, default 1) and lease their GPU only around GPU stages (learned features and matching, masks, 360° resampling), so a camera solve maps on the CPU while another job trains. A lease waits while the GPU is busy, unless training runs there and its free memory covers the stage; queued training goes first.
+- **Processing on AMD / Intel**: the setup assistant's processing profiles `rocm6.4` (PyTorch 2.8 for ROCm 6.4, a dedicated AMD card) and `xpu` (PyTorch 2.7.1, Intel Arc) run splatprep on those GPUs (`gui/runtime_plan.py` `PROCESSING_GPU_PROFILES`); training there uses the Vulkan trainer.
 - **`processing.py`**: runs splatprep requests in the subprocess backend and zips outputs (built on request, with `skip` / `only`).
 - **`runtime_install.py`**: remote install of the processing models into the GPU runtime (`/v1/runtime`), keeping torch pinned.
 - **Studio** (`splatworker/studio/`, GTK-free and unit tested; pages in `splatworker/gui/gtk/studio/`): the Linux SplatWork app (OpenGL viewer, New Project, editing, export, iPhone Inbox, compute devices). Its GPU work runs as jobs of the same server. See [dev/LINUX_STUDIO.md](dev/LINUX_STUDIO.md).
@@ -194,6 +200,7 @@ The CLI's `--eval` reports held-out PSNR, per view if asked; the measured result
   - the setup assistant: `runtime_plan.py` picks a GPU profile from the driver (cu128 → PyTorch 2.7.1 + gsplat 1.6 dev build; cu124/121/118 → PyTorch 2.4.1 + gsplat 1.5.3), and `installer.py` installs a pinned standalone CPython 3.10, torch and gsplat. The runtime is built in `venv.new` and swapped in only after verification. Profiles whose gsplat wheel isn't published are skipped, and local wheels in `wheels/` are preferred;
   - `server_process.py` runs `python -m splatworker serve` as a child process;
   - `updates.py` checks the published Flatpak repository and shows an update banner.
+- **Windows** (`windows/`, [dev/WINDOWS.md](dev/WINDOWS.md)): the same GTK 4 app and Python worker, packaged as an MSI (WiX, `windows/build/make_wxs.py`) and a portable zip. `platform_compat.py` keeps one code path for memory, links and process trees on Linux and Windows; `platform_win.py` lists graphics cards through DXGI in place of sysfs. Tested in CI only.
 - **Flatpak** (`linux/flatpak/`): manifest on `org.gnome.Platform//51`, generated `python3-deps.json`, and `build-gsplat-wheel.sh`. That script builds the pinned gsplat 1.6 wheel in a podman container, for this GPU or `--all`. It patches the upstream `cudaEventCreate` overload, and uses `nvcc --threads` with a memory-aware job count.
 
 ## splatprep (`tools/splatprep/`)
@@ -201,11 +208,12 @@ The CLI's `--eval` reports held-out PSNR, per view if asked; the measured result
 One entry point, `python -m splatprep run --request request.json --progress-jsonl -`. It is used by the Mac (`SplatPrepRunner`) and by the worker. The tasks are `sfm`, `masks`, `frames` and `benchmark`.
 
 - **Backends** (`backends/`): `colmap_sift`, `opencv_sift`, LightGlue family (`sift`/`superpoint`/`disk`/`aliked`), `loftr`, `mast3r`, `vggt`. Model availability is reported from what actually imports.
-- **Pairs** (`pairs.py`): sequential, exhaustive, retrieval, or auto. Prior-pose proximity and GPS spatial matching (drone sets) add pairs.
+- **Pairs** (`pairs.py`): sequential, exhaustive, retrieval, or auto. Prior-pose proximity adds pairs, and for photos with GPS (drone sets) `spatial_pairs` adds each photo's nearest neighbours by position (up to 20 within 200 m), which links neighbouring flight lines and never pairs far-apart look-alikes.
 - **Mapper** (`mapper.py`): GLOMAP, COLMAP or pycolmap. `auto` runs incremental and global up to 1,000 images and keeps the better result (registration, then track length). EXIF/ARKit focal lengths are held fixed while mapping; the final focal refinement is kept only if focal moves less than 8 %.
-- **GPS** (`gps.py`): solved centres are Sim3-fitted to EXIF GPS (DJI relative altitude, S/W hemispheres). If at most 2 % of cameras disagree, the scene is put in ENU metres with +Z up and the disagreeing cameras are dropped. Otherwise a warning is raised. The scene extent is computed robustly.
+- **GPS** (`gps.py`): drone take-off and landing shots (near the ground while most photos are well above it, from DJI's height above take-off) are left out before the solve. Solved centres are Sim3-fitted to EXIF GPS (DJI relative altitude, S/W hemispheres); a camera disagrees when it is more than 6 m or 5 % of the flight's extent from its GPS position. The check passes when at most 2 % disagree, or when the median error is under a quarter of that limit and at most 15 % disagree; the scene is then put in ENU metres with +Z up and the disagreeing cameras are dropped. Otherwise a warning is raised and the scene stays in SfM units. The result is written to `gps_check.json`, and a worker's whole-pipeline job stops before training when it failed (`pipeline.gps_gate`), as the Mac does. The scene extent is computed robustly.
+- **GPS-held re-solve** (`backends/base.py` `_hold_to_gps`, `mapper.run_gps_prior_mapper`): when the first solve fails the GPS check, or places under 70 % of the photos, the survey is solved again with incremental mapping held to the GPS positions (COLMAP's `pose_prior_mapper` when the CLI has it, else pycolmap with `use_prior_position`, robust loss). Each resulting model is Sim3-aligned to GPS before they are merged (a model along a single flight line is left out), and the GPS-held solve is kept when it is better: when both match GPS, the one that placed more photos; otherwise the GPS-held one if it passes the check, or disagrees less while placing at least 80 % as many photos.
 - **Prior refinement** (`prior_refine.py`, `priorMode: refine`): with poses and intrinsics on at least 90 % of images, it builds look-at pairs, triangulates with the priors and runs pose-only BA ×2. Frames with too few points keep the prior pose, and implausible corrections fall back to the priors.
-- **Frames** (`frames.py`): a port of the Mac's sharpest-per-window selection and equirect → pinhole views. It decodes with PyAV and resamples with `grid_sample` on the GPU (OpenCV `remap` otherwise), producing the same `images/`, `masks/` and `frames.json` layout as the Mac.
+- **Frames** (`frames.py`): a port of the Mac's sharpest-per-window selection and equirect → pinhole views. It decodes with PyAV (on an NVIDIA GPU's video decoder, NVDEC, when that gives the same pictures as the CPU: `videodecode.py`, `SPLATPREP_VIDEO_DECODE` = `auto` | `cpu` | `cuda`; Linux 1.7.10) and resamples with `grid_sample` on the GPU (OpenCV `remap` otherwise), producing the same `images/`, `masks/` and `frames.json` layout as the Mac.
 - **Masks** (`masks/`): `detect` (OWLv2), `dynamic` (detection + SAM 2 video tracking), `sam2`, `track`, `sky`, `person`, and `server.py` (the click-to-mask server behind the Mac's mask editor).
 - **Benchmark and synth** (`benchmark.py`, `synth.py`, `verification.py`): the model benchmark shown in Models & Benchmarks, and synthetic test scenes.
 
@@ -229,7 +237,7 @@ On pushes that touch `linux/` or `tools/`:
    - It reads `linux/flatpak/gsplat-pin.env`.
    - If the wheel is cached, it uses the cache. If not, it downloads a wheel attached to the GitHub Release `gsplat-<version>-<cuda tag>` (built on a PC with `build-gsplat-wheel.sh --all`).
    - Only if neither exists does it install the CUDA toolkit and compile the pinned commit, with the same `cudaEventCreate` patch.
-2. **Flatpak job:** it builds the app into an OSTree repository (optionally GPG-signed). It writes `.flatpakrepo`, `.flatpakref`, `version.json` and a pip `--find-links` wheel index, then publishes everything to GitHub Pages. Installed workers update from there.
+2. **Flatpak job:** it builds the app into an OSTree repository, GPG-signed with the `FLATPAK_GPG_PRIVATE_KEY` repository secret (the public key goes into `.flatpakrepo` / `.flatpakref`; without the secret the build is unsigned). It writes `.flatpakrepo`, `.flatpakref`, `version.json` and a pip `--find-links` wheel index, then publishes everything to GitHub Pages. Installed workers update from there.
 
 ## Known performance headroom
 
