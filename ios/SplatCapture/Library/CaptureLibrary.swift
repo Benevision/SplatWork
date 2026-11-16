@@ -12,6 +12,8 @@ struct CaptureItem: Identifiable, Hashable, Sendable {
     var hasPointCloud: Bool
     var resolution: String?
     var device: String?
+    /// A stereo (wide + ultra-wide) capture: photo pairs without ARKit poses, so it can't train on the phone.
+    var isStereo: Bool = false
 
     var thumbnailURL: URL { url.appendingPathComponent("thumbnail.jpg") }
 }
@@ -87,7 +89,8 @@ final class CaptureLibrary {
                 hasLiDAR: summary?.hasLiDAR ?? false,
                 hasPointCloud: fm.fileExists(atPath: url.appendingPathComponent("points.ply").path),
                 resolution: res,
-                device: summary?.device))
+                device: summary?.device,
+                isStereo: summary?.source == StereoManifest.source))
         }
         return out.sorted { $0.createdAt > $1.createdAt }
     }

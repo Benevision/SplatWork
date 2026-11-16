@@ -595,3 +595,45 @@ Capture bundles (§1) may carry stereo rigs and extra sensors. Readers that only
 ```
 
 `coordinateSystem` may also be `"openxr"` (right-handed, +Y up, camera looks down -Z — same as ARKit) or `"opencv"`.
+
+### iPhone stereo captures (`"source": "iphone-stereo"`)
+
+SplatWork Capture's **Stereo** mode records photo pairs from the iPhone's wide and ultra-wide cameras, taken together
+through the dual-wide virtual camera (constituent photo delivery), with each photo's factory calibration. There are
+**no poses**: readers treat the bundle as photos and solve the cameras. The manifest:
+
+```jsonc
+{
+  "format": "splatcapture", "version": 2, "source": "iphone-stereo",
+  "name": "…", "createdAt": "…", "device": "iPhone16,1", "appVersion": "1.2", "hasLiDAR": false,
+  "imageWidth": 4032, "imageHeight": 3024,
+  "geometricDistortionCorrection": true,     // iOS straightened the ultra-wide's lens distortion in the photos
+  "rig": {
+    "sensors": [
+      { "id": "wide", "kind": "rgb", "width": 4032, "height": 3024,
+        "intrinsics": [fx, fy, cx, cy],         // saved-image pixels, from AVCameraCalibrationData
+        "extrinsics": [12 floats] },            // AVCameraCalibrationData.extrinsicMatrix, 3×4 row-major [R | t],
+      { "id": "ultrawide", … }                  //   t in millimetres, camera from the device's reference camera
+    ],
+    "baseline": 0.0135                          // metres between the lenses (informative)
+  },
+  "frames": [
+    { "index": 0, "timestamp": 1234.5,
+      "images": { "wide": "images/000000_wide.heic", "ultrawide": "images/000000_ultrawide.heic" },
+      "intrinsics": { "wide": [fx, fy, cx, cy], "ultrawide": [fx, fy, cx, cy] },   // per shot (focus moves them)
+      "depth": "depth/000000_wide.f16",           // optional: the dual camera's depth map, float16 LE metres
+      "depthWidth": 768, "depthHeight": 576,
+      "depthIntrinsics": [fx, fy, cx, cy],        // depth-map pixels
+      "depthExtrinsics": [12 floats] }            // the camera the depth map is relative to
+  ]
+}
+```
+
+Photos are stored in sensor orientation (no EXIF rotation), so calibration and depth line up with the pixels.
+
+SplatWork on the Mac (`StereoCaptureIngest`) turns a pair into a rig group: the wide camera is the rig frame and the
+ultra-wide sits at `rig_from_cam = R_w R_uᵀ`, centre `t_w − R_w R_uᵀ t_u` (metres). It is used only when the
+lenses are 5–60 mm apart and turned less than 5°; otherwise the two lenses are solved as separate cameras. Each lens
+gets its own camera (`cameraGroups`), the splatprep request carries the rig as `multiview` groups with `{"R", "t"}`
+views, and the solved scene is in metres. A depth map whose extrinsics match the wide camera is resampled onto the
+wide photo (quarter resolution) as the frame's depth.

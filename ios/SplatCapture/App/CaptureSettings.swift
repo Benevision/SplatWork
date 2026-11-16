@@ -31,6 +31,14 @@ enum OverlayStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     var label: String { self == .color ? "True colour" : "Highlight" }
 }
 
+/// What the Capture tab records: ARKit poses with LiDAR depth, or synchronised photo pairs from the wide and
+/// ultra-wide cameras (no ARKit poses: the Mac solves the cameras, the pair's factory calibration gives the scale).
+enum CaptureKind: String, Codable, CaseIterable, Identifiable, Sendable {
+    case lidar, stereo
+    var id: String { rawValue }
+    var label: String { self == .lidar ? "LiDAR" : "Stereo" }
+}
+
 /// Immutable snapshot of every capture-related setting, handed to the
 /// capture engine (which runs off the main actor) when a session starts.
 struct CaptureSettings: Codable, Sendable, Equatable {
@@ -81,6 +89,13 @@ struct CaptureSettings: Codable, Sendable, Equatable {
     var overlayPointSize: Float = 3
     var showMiniMap: Bool = true
     var haptics: Bool = true
+
+    /// Capture tab mode.
+    var kind: CaptureKind = .lidar
+    /// Stereo mode: seconds between photo pairs.
+    var stereoInterval: Double = 0.8
+    /// Stereo mode: also record the dual camera's own depth map with each pair, where the phone supports it.
+    var stereoDepth: Bool = true
 }
 
 extension CaptureSettings {

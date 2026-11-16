@@ -47,6 +47,7 @@
 		9174D2FF7A8E7400FDAAB5BE /* Equirect360.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C28CE971B1AD74C2DB12576 /* Equirect360.swift */; };
 		91FEB51E56630A95773FD427 /* PoseCommon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BCE07DBA512D60AEF8DCB76 /* PoseCommon.swift */; };
 		970C8EACAE1848F7FF0453D9 /* SortShaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDEE078DC37C6A8A3EE1AD26 /* SortShaders.swift */; };
+		9915C99E188DA1107B75D10E /* StereoCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C3A14775FE5D559DB0555C3 /* StereoCaptureView.swift */; };
 		997AECC865BADFD71AE7298D /* Dataset.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE5931E6AE322FF3EA761A66 /* Dataset.swift */; };
 		9C938FCDBFF6B35FF50AD957 /* StereoDepth.swift in Sources */ = {isa = PBXBuildFile; fileRef = D32202F0594CCEDC23FC7894 /* StereoDepth.swift */; };
 		9CA596FEF55D2B0116D155C2 /* TrainShaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F46906B03EBFC6B7CE135FB /* TrainShaders.swift */; };
@@ -55,6 +56,7 @@
 		A988BB74A895A97D7E0D533F /* MiniMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20C3E7A4204426419D0315C5 /* MiniMapView.swift */; };
 		AA685982625799DBF95386FA /* MetalTrainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB75762CC6A47897F47538C /* MetalTrainer.swift */; };
 		AEE69BD7A99381990F836E8D /* MetalContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5ED7C3D6A56E0E5F5D87C4D /* MetalContext.swift */; };
+		AF1C1C990AB5094F42382A7C /* StereoCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE796BE52F289CAB4AC7863 /* StereoCapture.swift */; };
 		AF3FC4361C08A16E75C5E615 /* UploadBatches.swift in Sources */ = {isa = PBXBuildFile; fileRef = C663A4C8451256A897807929 /* UploadBatches.swift */; };
 		B2B74E577DA08B698F899880 /* TrainingConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38A6A70AD3BBA9693569029C /* TrainingConfig.swift */; };
 		B2F023C8F8C056CE9E6BFE37 /* TrainSkybox.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B9E09F423E7199F7CD8D2D /* TrainSkybox.swift */; };
@@ -120,6 +122,7 @@
 		4754FAF3FE754B14931580F5 /* SplatCaptureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatCaptureApp.swift; sourceTree = "<group>"; };
 		518274B16DD673B16FBD5FE6 /* libSplatTrainKit.a */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = archive.ar; path = libSplatTrainKit.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A5379555B5C140B256FFEB9 /* WorkerBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerBrowser.swift; sourceTree = "<group>"; };
+		5C3A14775FE5D559DB0555C3 /* StereoCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StereoCaptureView.swift; sourceTree = "<group>"; };
 		5C938B6AB63A19BDCA8B5B6A /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		6185D6E925BF05EE7C0B81FD /* Masking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Masking.swift; sourceTree = "<group>"; };
 		62E6687CD9FC6A23AB70B55A /* PauseController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PauseController.swift; sourceTree = "<group>"; };
@@ -133,6 +136,7 @@
 		77ADE0588FE32C0299F98B66 /* PhotoLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLocation.swift; sourceTree = "<group>"; };
 		7A2CE60DC8CED6FBC2677AB1 /* SplatCapture.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SplatCapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7AE6CA3FC42FE6EFDD3DC4D4 /* TrainingData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingData.swift; sourceTree = "<group>"; };
+		7BE796BE52F289CAB4AC7863 /* StereoCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StereoCapture.swift; sourceTree = "<group>"; };
 		8204A8E6DA1B767A693F3DA6 /* ZipWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipWriter.swift; sourceTree = "<group>"; };
 		8B0E6B66D4098F608DDC0A01 /* SplatMaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatMaker.swift; sourceTree = "<group>"; };
 		8D78D5514BC872E65CE1282A /* BlockTraining.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockTraining.swift; sourceTree = "<group>"; };
@@ -352,6 +356,7 @@
 				20C3E7A4204426419D0315C5 /* MiniMapView.swift */,
 				E4DBA7787CA528054AA4A91D /* SendToMacView.swift */,
 				64939A11153C5CCB19C3F165 /* SettingsView.swift */,
+				5C3A14775FE5D559DB0555C3 /* StereoCaptureView.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -424,6 +429,7 @@
 				B4ED171959AEA0BD153F5C17 /* KeyframeSelector.swift */,
 				C6C42AF3DDA458931753874A /* Manifest.swift */,
 				0E6E4AC929F13FF4FC36C42C /* PointFusion.swift */,
+				7BE796BE52F289CAB4AC7863 /* StereoCapture.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
@@ -595,6 +601,8 @@
 				7ED61AFC936F05A204566086 /* SplatCaptureApp.swift in Sources */,
 				14192E1358C9AEDB84BC4B13 /* SplatJobs.swift in Sources */,
 				593FB9389BFC10D3AA1A3FE8 /* SplatSelfTest.swift in Sources */,
+				AF1C1C990AB5094F42382A7C /* StereoCapture.swift in Sources */,
+				9915C99E188DA1107B75D10E /* StereoCaptureView.swift in Sources */,
 				286D81C329180C0711754412 /* ZipReader.swift in Sources */,
 				D3545436F87FF41C989327D4 /* ZipWriter.swift in Sources */,
 			);

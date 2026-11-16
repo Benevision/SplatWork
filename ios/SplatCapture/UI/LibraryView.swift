@@ -93,7 +93,7 @@ struct LibraryView: View {
                             Button { sending = item } label: { Label("Send", systemImage: "desktopcomputer") }.tint(.green)
                         }
                         .contextMenu {
-                            Button { making = item } label: { Label("Make splat", systemImage: "sparkles") }
+                            if !item.isStereo { Button { making = item } label: { Label("Make splat", systemImage: "sparkles") } }
                             Button { sending = item } label: { Label("Send to Mac", systemImage: "desktopcomputer.and.arrow.down") }
                             Button { share(item) } label: { Label("Share as .zip", systemImage: "square.and.arrow.up") }
                             Button { beginRename(item) } label: { Label("Rename", systemImage: "pencil") }
@@ -196,13 +196,19 @@ struct CaptureDetailView: View {
                 LabeledContent("Keyframes", value: "\(current.frameCount)")
                 LabeledContent("Size", value: current.bytes.formattedBytes)
                 if let r = current.resolution { LabeledContent("Resolution", value: r) }
+                LabeledContent("Kind", value: current.isStereo ? "Stereo (wide + ultra-wide)" : "LiDAR / ARKit")
                 LabeledContent("LiDAR depth", value: current.hasLiDAR ? "Yes" : "No")
                 LabeledContent("Point cloud", value: current.hasPointCloud ? "Yes" : "No")
                 if let d = current.device { LabeledContent("Device", value: d) }
             }
             Section {
-                Button { onMakeSplat(current) } label: {
-                    Label(SplatOutput.for(current.url).exists ? "Splat (view or make again)" : "Make splat", systemImage: "sparkles")
+                if current.isStereo {
+                    Label("Stereo captures have no phone-tracked camera positions: send them to SplatWork on your Mac, which solves the cameras.",
+                          systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Button { onMakeSplat(current) } label: {
+                        Label(SplatOutput.for(current.url).exists ? "Splat (view or make again)" : "Make splat", systemImage: "sparkles")
+                    }
                 }
                 Button { onSend(current) } label: { Label("Send to Mac", systemImage: "desktopcomputer.and.arrow.down") }
                 Button { onShare(current) } label: { Label("Share as .zip (AirDrop, Files…)", systemImage: "square.and.arrow.up") }

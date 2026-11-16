@@ -17,6 +17,16 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 
+                // MARK: Stereo
+                Section("Stereo mode") {
+                    Explained("Stereo mode (switch at the top of the Capture screen) takes photo pairs from the wide and ultra-wide cameras at once. The ultra-wide adds a wider view for solving the cameras, and the fixed gap between the lenses gives the scene its real size. There's no LiDAR or phone tracking in this mode: SplatWork on your Mac solves the cameras. Default: every 0.8 s.") {
+                        SliderRow(title: "Pair interval", value: s.stereoInterval, range: 0.3...3, step: 0.1, unit: "s", decimals: 1)
+                    }
+                    Explained("Also save the dual camera's own depth map with each pair, where the phone supports it. It helps training on surfaces close to the phone; beyond a couple of metres the lenses are too close together for useful depth. Default: on.") {
+                        Toggle("Record stereo depth", isOn: s.stereoDepth)
+                    }
+                }
+
                 // MARK: Keyframes
                 Section("Keyframes") {
                     Explained("Automatic saves a frame whenever you've moved or turned far enough since the last one — this gives even coverage no matter how fast you walk. Timed saves at a fixed interval. Default: Automatic.") {

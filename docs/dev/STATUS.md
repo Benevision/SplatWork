@@ -51,6 +51,9 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
   densification still round-trips through the CPU. It isn't in the Windows app yet.
 - The Mac's time left for a block run assumes one block at a time per device, so it reads high when a worker trains
   several blocks at once (one per GPU).
+- SplatWork Capture's Stereo mode (wide + ultra-wide pairs) is built but not yet recorded on a real iPhone. Whether
+  each phone delivers the lens calibration and depth maps alongside both photos is still to confirm. SplatWork for
+  Linux doesn't import stereo bundles yet (Mac only).
 - The colour-correction safeguard has not yet fired on real data (healthy runs stay quiet; the failure it targets
   was seen once, on a wrong camera solve).
 - The Windows installer isn't code-signed, so SmartScreen warns on first run.

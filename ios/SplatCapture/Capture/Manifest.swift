@@ -40,6 +40,7 @@ struct ManifestSummary: Decodable, Sendable {
     var createdAt: Date?
     var device: String?
     var hasLiDAR: Bool?
+    var source: String?
     var imageWidth: Int?
     var imageHeight: Int?
     var frames: [FrameStub]?

@@ -186,7 +186,12 @@ enum DatasetBuilder {
 
     static func build(source: SourceDescription, options: PrepOptions = .init(), into dir: URL,
                       worker: WorkerClient? = nil, progress: PipelineProgressHandler? = nil) async throws -> PreparedDataset {
-        let o = options.resolved
+        var o = options.resolved
+        // SplatWork Capture's stereo mode: photo pairs without phone poses, solved like photos (with the lens rig).
+        let stereoCapture: Bool = { if case .captureBundle(let u) = source { return StereoCaptureIngest.isStereoBundle(u) }; return false }()
+        if stereoCapture, case .fromCapture = o.poseSolver {
+            o.poseSolver = .splatprep(featureModelId: refineFeatures(o, worker: worker), matching: "auto", mapper: "auto")
+        }
         let fm = FileManager.default
         try fm.ensureDirectory(dir)
         let ingestP = PipelineProgress.scaled(progress, 0...0.35)
@@ -222,6 +227,8 @@ enum DatasetBuilder {
 
         // 1. Sources that already carry poses.
         switch source {
+        case .captureBundle where stereoCapture:
+            break
         case .captureBundle(let u):
             var ds = try await importedAndMasked(0.6...0.7) {
                 try await CaptureImporter.importBundle(u, options: o.capture, into: dir, progress: PipelineProgress.scaled(progress, 0...0.6))
@@ -309,6 +316,8 @@ enum DatasetBuilder {
         switch source {
         case .photos(let folder):
             frames = try await PhotoIngest.ingest(folder: folder, options: o.photos, into: dir, progress: ingestP)
+        case .captureBundle(let u):
+            frames = try await StereoCaptureIngest.ingest(u, options: o.photos, into: dir, progress: ingestP)
         case .photoFiles(let files):
             frames = try await PhotoIngest.ingest(files: files, options: o.photos, into: dir, progress: ingestP)
         case .video(let u):

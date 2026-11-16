@@ -195,12 +195,18 @@ enum RigConstraints {
         for f in frames.frames where f.group != nil && f.rotationToRig != nil { groups[f.group!, default: []].append(f) }
         for (_, views) in groups {
             var qs: [simd_quatf] = [], centres: [SIMD3<Float>] = []
+            func offset(_ v: IngestedFrame) -> SIMD3<Float> {
+                guard let t = v.rigCentre, t.count == 3 else { return .zero }
+                return SIMD3(t[0], t[1], t[2])
+            }
             for v in views {
                 guard let p = sol.poses[v.image] else { continue }
                 let Rv = p.c2w.upperLeft3x3
                 let Rc = simd_float3x3(rowMajor: v.rotationToRig!)
-                qs.append(simd_quatf(orthonormalized(Rv * Rc.transpose)))
-                centres.append(p.c2w.translation)
+                let Rr = orthonormalized(Rv * Rc.transpose)
+                qs.append(simd_quatf(Rr))
+                // the rig's centre as this view sees it (views with a baseline sit off it by their offset)
+                centres.append(p.c2w.translation - Rr * offset(v))
             }
             guard qs.count >= minRegisteredViews else { continue }
             // Sign-aligned quaternion average.
@@ -212,7 +218,7 @@ enum RigConstraints {
             for v in views {
                 let Rc = simd_float3x3(rowMajor: v.rotationToRig!)
                 var p = sol.poses[v.image] ?? SolvedPose(c2w: matrix_identity_float4x4)
-                p.c2w = simd_float4x4(rotation: Rrig * Rc, translation: c)
+                p.c2w = simd_float4x4(rotation: Rrig * Rc, translation: c + Rrig * offset(v))
                 sol.poses[v.image] = p
             }
         }

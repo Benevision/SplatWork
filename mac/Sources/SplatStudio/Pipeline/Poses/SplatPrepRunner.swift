@@ -82,14 +82,33 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
         var rightToLeft: [[Float]]? = nil
         /// Stereo: [[left image, right image]] basenames.
         var pairs: [[String]]? = nil
-        /// Multiview: groups of {image basename: camera-to-rig rotation (row-major 3x3)}.
-        var groups: [[String: [[Float]]]]? = nil
+        /// Multiview: groups of {image basename: camera-to-rig rotation (row-major 3x3)}, or {"R": …, "t": centre in the
+        /// rig frame (m)} for views with a baseline (splatprep rig.py; SplatWork for Linux ≥ 1.4.0).
+        var groups: [[String: RigView]]? = nil
         /// Multiview: the views' exact pinhole intrinsics [fx, fy, cx, cy] (all views share them). splatprep ≥
         /// 2026-11-08 then registers whole frames with these fixed instead of guessing a focal length.
         var intrinsics: [Float]? = nil
     }
 
     init(task: Task) { self.task = task }
+
+    /// A rig view: a bare rotation (shared optical centre), or rotation + centre.
+    enum RigView: Codable, Hashable, Sendable {
+        case rotation([[Float]])
+        case pose(R: [[Float]], t: [Float])
+        private enum K: String, CodingKey { case R, t }
+        init(from d: Decoder) throws {
+            if let m = try? d.singleValueContainer().decode([[Float]].self) { self = .rotation(m); return }
+            let c = try d.container(keyedBy: K.self)
+            self = .pose(R: try c.decode([[Float]].self, forKey: .R), t: try c.decode([Float].self, forKey: .t))
+        }
+        func encode(to e: Encoder) throws {
+            switch self {
+            case .rotation(let m): var c = e.singleValueContainer(); try c.encode(m)
+            case .pose(let R, let t): var c = e.container(keyedBy: K.self); try c.encode(R, forKey: .R); try c.encode(t, forKey: .t)
+            }
+        }
+    }
 }
 
 /// A line of `--progress-jsonl` output.
@@ -271,8 +290,18 @@ struct SplatPrepPoseSolver: PoseSolver {
             r.rig = .init(kind: "stereo", baseline: rig.baseline, rightToLeft: rig.rightToLeft,
                           pairs: RigConstraints.stereoPairs(frames).map { [($0.0.image as NSString).lastPathComponent, ($0.1.image as NSString).lastPathComponent] })
         } else if frames.isMultiViewRig {
-            var groups: [Int: [String: [[Float]]]] = [:]
-            for f in frames.frames { if let g = f.group, let R = f.rotationToRig { groups[g, default: [:]][(f.image as NSString).lastPathComponent] = R } }
+            var groups: [Int: [String: ProcessingRequest.RigView]] = [:]
+            for f in frames.frames {
+                guard let g = f.group, let R = f.rotationToRig else { continue }
+                groups[g, default: [:]][(f.image as NSString).lastPathComponent] = f.rigCentre.map { .pose(R: R, t: $0) } ?? .rotation(R)
+            }
+            if frames.frames.contains(where: { $0.rigCentre != nil }) {
+                // lenses with a baseline (iPhone wide + ultra-wide): each lens its own camera, also if the mapper
+                // can't use the rig and maps the photos one by one
+                r.singleCamera = false
+                r.cameraGroups = Dictionary(frames.frames.compactMap { f in f.cameraGroup.map { ((f.image as NSString).lastPathComponent, $0) } },
+                                            uniquingKeysWith: { a, _ in a })
+            }
             var hint = ProcessingRequest.RigHint(kind: "multiview", groups: groups.keys.sorted().map { groups[$0]! })
             if let f = frames.frames.first, let fp = f.focalPx,
                frames.frames.allSatisfy({ $0.focalPx == fp && $0.width == f.width && $0.height == f.height }) {

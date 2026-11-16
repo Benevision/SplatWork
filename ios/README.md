@@ -73,6 +73,16 @@ xcrun altool --upload-app -f build/export/SplatCapture.ipa -t ios --apiKey <KEY>
    - If the Mac doesn't appear, use **Enter address manually** and type the IP address and port shown in SplatWork.
    - You can also **Share as .zip** with AirDrop or Files. Captures also appear in the Files app under *On My iPhone › SplatWork Capture › Captures*.
 
+### Stereo mode (wide + ultra-wide)
+
+Switch **LiDAR / Stereo** at the top of the camera screen. Stereo mode takes a photo pair from the wide and
+ultra-wide cameras together, at the interval in *Settings → Stereo mode* (default 0.8 s). It works on any iPhone with
+both cameras (iPhone 11 or newer). There's no ARKit tracking or LiDAR in this mode, so walk slowly and overlap
+generously. SplatWork on the Mac solves the cameras, keeping each pair at the lenses' calibrated offset, which gives
+the scene its real size. *Record stereo depth* also saves the dual camera's depth map with each pair where the phone
+supports it. Send stereo captures to the Mac: they can't be made into a splat on the phone. The bundle format is in
+[PROTOCOL.md §8](../docs/PROTOCOL.md).
+
 ### Making a splat on the iPhone
 
 **Make splat** (after a capture, or in the Library) turns a capture into a trained splat without any other computer:

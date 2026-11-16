@@ -213,6 +213,13 @@ through a place give the best results. Shots that only pan, zoom or follow a mov
    Mac doesn't appear, enter the manual address shown in the Inbox.
 3. In the Inbox, click **Create splat…** next to the capture.
 
+**Stereo mode** (switch at the top of SplatWork Capture's camera screen): instead of ARKit poses and LiDAR depth, the
+app takes photo pairs from the wide and ultra-wide cameras at once, every 0.8 s by default (iPhone 11 or newer). The
+Mac solves the cameras like photos. Each pair is kept together at the lenses' factory-calibrated offset, which puts
+the scene in metres, and the ultra-wide's wider view gives the solve more to match. Where the phone supports it, the
+dual camera's depth map is saved with each pair and used in training. Its depth is useful close up; beyond a couple
+of metres the lenses are too close together. Stereo captures can't be turned into a splat on the iPhone itself.
+
 ## 4. Projects, history and resuming
 
 The **Projects** list in the sidebar remembers every project you've created, processed, trained or opened, including

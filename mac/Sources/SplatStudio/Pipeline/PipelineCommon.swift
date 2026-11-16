@@ -108,6 +108,9 @@ struct IngestedFrame: Codable, Hashable, Sendable {
     var group: Int? = nil
     /// For 360 views: camera-to-rig rotation (OpenCV camera convention), row-major 3x3. Known exactly.
     var rotationToRig: [[Float]]? = nil
+    /// For rigs with a baseline (the iPhone's wide + ultra-wide pair): the camera centre in the rig frame, metres
+    /// (rig frame = the group's reference camera; nil = shares the rig's optical centre, as 360° views do).
+    var rigCentre: [Float]? = nil
     /// For stereo: "left" or "right".
     var eye: String? = nil
     /// Optional depth map (float16 LE, metres, Z-depth) relative to the frame-set root.

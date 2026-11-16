@@ -5,6 +5,7 @@ struct CaptureView: View {
     @Environment(CaptureLibrary.self) private var library
     @Environment(\.scenePhase) private var scenePhase
     @State private var model = CaptureViewModel()
+    @State private var stereoModel = StereoCaptureModel()
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var flash = false
@@ -13,6 +14,10 @@ struct CaptureView: View {
 
     var body: some View {
         ZStack {
+            if settings.capture.kind == .stereo {
+                StereoCaptureView(model: stereoModel, onLibrary: { openLibrary() }, onSettings: { showSettings = true },
+                                  onSend: { sendTarget = $0 })
+            } else {
             ARCaptureView(model: model, settings: settings.capture)
                 .ignoresSafeArea()
 
@@ -42,6 +47,10 @@ struct CaptureView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
+            }
+            if model.phase == .idle && stereoModel.phase == .idle {
+                VStack { modePicker.padding(.top, 50); Spacer() }
+            }
         }
         .preferredColorScheme(.dark)
         .statusBarHidden(model.isRecording)
@@ -55,9 +64,10 @@ struct CaptureView: View {
             flash = true
             withAnimation(.easeOut(duration: 0.25)) { flash = false }
         }
-        .onAppear { model.startSession(settings: settings.capture) }
+        .onAppear { activate() }
         .onChange(of: settings.capture) { _, new in
-            if !model.isRecording { model.startSession(settings: new) }
+            if new.kind == .stereo { if model.phase == .idle { model.pauseSession() } }
+            else if !model.isRecording { stereoModel.stop(); model.startSession(settings: new) }
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -66,15 +76,16 @@ struct CaptureView: View {
                     model.autoStopMessage = "Recording stopped because the app went to the background."
                     model.stopRecording()
                 }
+                if stereoModel.phase == .recording { stereoModel.toggle(settings: settings.capture) }
             case .active:
-                if !showLibrary && !showSettings && makeTarget == nil { model.startSession(settings: settings.capture) }
+                if !showLibrary && !showSettings && makeTarget == nil { activate() }
             default: break
             }
         }
-        .fullScreenCover(isPresented: $showLibrary, onDismiss: { model.startSession(settings: settings.capture) }) {
+        .fullScreenCover(isPresented: $showLibrary, onDismiss: { activate() }) {
             LibraryView()
         }
-        .sheet(isPresented: $showSettings, onDismiss: { model.startSession(settings: settings.capture) }) {
+        .sheet(isPresented: $showSettings, onDismiss: { activate() }) {
             SettingsView()
         }
         .sheet(isPresented: $model.showFinished) {
@@ -113,7 +124,7 @@ struct CaptureView: View {
         .sheet(item: $sendTarget) { item in
             SendToMacView(item: item)
         }
-        .fullScreenCover(item: $makeTarget, onDismiss: { model.startSession(settings: settings.capture) }) { item in
+        .fullScreenCover(item: $makeTarget, onDismiss: { activate() }) { item in
             MakeSplatView(item: item)
         }
         .alert("SplatWork Capture", isPresented: Binding(
@@ -132,7 +143,30 @@ struct CaptureView: View {
 
     private func openLibrary() {
         model.pauseSession()
+        stereoModel.stop()
         showLibrary = true
+    }
+
+    /// Runs the camera for the current mode: ARKit for LiDAR captures, the dual-wide camera for stereo.
+    private func activate() {
+        if settings.capture.kind == .stereo {
+            model.pauseSession()
+            stereoModel.start(settings: settings.capture)
+        } else {
+            stereoModel.stop()
+            model.startSession(settings: settings.capture)
+        }
+    }
+
+    private var modePicker: some View {
+        @Bindable var s = settings
+        return Picker("Mode", selection: $s.capture.kind) {
+            ForEach(CaptureKind.allCases) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 200)
+        .padding(4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Top

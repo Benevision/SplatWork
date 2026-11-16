@@ -6,6 +6,12 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork Capture: Stereo mode (new, not yet tried on a phone).** A *LiDAR / Stereo* switch on the camera screen.
+  Stereo takes photo pairs from the wide and ultra-wide cameras at once (iPhone 11 or newer), each with the lenses'
+  factory calibration and, where the phone supports it, the dual camera's depth map. SplatWork on the Mac solves the
+  cameras like photos and keeps each pair at the lenses' calibrated offset, so the scene comes out in metres. The
+  ultra-wide's wider view gives the solve more to match. Checked on the Mac with a synthetic pair set: the rig was
+  used and the 12 mm offset came out exactly; not yet recorded on a real iPhone.
 - **SplatWork Capture builds again.** Two files the shared code started using in 1.3.0 (home-video analysis and the
   batched uploads) weren't in the iPhone project, so building it failed with "Cannot find 'HomeVideoAnalysis' in
   scope".
