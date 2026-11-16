@@ -118,6 +118,15 @@ struct NewProjectSheet: View {
             if prep.running {
                 Button("Hide") { dismiss() }
                     .help("Keep preparing in the background and use the rest of the app; the progress button in the toolbar brings this back")
+                Button("New Project…") {
+                    // this one keeps preparing; the sheet reopens on a fresh project
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        model.newProjectSource = nil
+                        model.showNewProject = true
+                    }
+                }
+                .help("Start another project while this one keeps preparing (for example on this Mac while this one uploads to a worker)")
             }
             if !prep.running && prep.error == nil && mode == .easy {
                 Toggle("Show all options", isOn: $showAll)

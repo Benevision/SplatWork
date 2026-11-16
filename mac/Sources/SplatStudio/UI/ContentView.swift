@@ -86,21 +86,25 @@ struct ContentView: View {
             Button { model.newProjectSource = nil; model.showNewProject = true } label: { Label("New", systemImage: "plus.square.on.square") }
                 .help("Create a splat from photos, video, 360° or iPhone captures (⌘N)")
             Button { openPanel() } label: { Label("Open", systemImage: "folder") }.help("Open a splat or dataset (⌘O)")
-            // A project being prepared in the background (its window hidden): progress, click to show it again.
-            if !model.showNewProject && (model.prep.running || model.prep.error != nil) {
-                Button { model.showNewProject = true } label: {
-                    HStack(spacing: 6) {
-                        if model.prep.running {
-                            ProgressView(value: min(max(model.prep.overall, 0), 1)).progressViewStyle(.circular).controlSize(.small)
-                            Text((model.prep.progress.stage.isEmpty ? "Preparing" : model.prep.progress.stage) + " · \(Int(model.prep.overall * 100)) %").lineLimit(1)
-                        } else {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            Text("Preparation failed")
+            // Projects being prepared in the background (their window hidden): progress, click to show one again.
+            let background = model.preps.filter { $0.running || ($0.error != nil && $0 === model.prep) }
+            if !model.showNewProject {
+                ForEach(background) { p in
+                    Button { model.show(prep: p) } label: {
+                        HStack(spacing: 6) {
+                            if p.running {
+                                ProgressView(value: min(max(p.overall, 0), 1)).progressViewStyle(.circular).controlSize(.small)
+                                Text((background.count > 1 ? (p.projectDir?.lastPathComponent ?? "Project") + ": " : "")
+                                     + (p.progress.stage.isEmpty ? "Preparing" : p.progress.stage) + " · \(Int(p.overall * 100)) %").lineLimit(1)
+                            } else {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                Text("Preparation failed")
+                            }
                         }
+                        .font(.caption)
                     }
-                    .font(.caption)
+                    .help("Show the project being prepared")
                 }
-                .help("Show the project being prepared")
             }
             // Training another project while you look at something else: one click back to its live view.
             if model.trainingElsewhere || (model.training.isActive && model.sidebar != .viewer) {

@@ -6,6 +6,13 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Several projects can prepare at once.** *New* while a project is preparing starts another one alongside it, for
+  example on this Mac while the first uploads to a worker. The preparation page also has a *New Project…* button.
+  Each running preparation gets its own progress button in the toolbar. Each project page shows and stops its own
+  run, and Resume no longer waits for another project. A project trains with the settings it was started with. One
+  that finishes while another project is training waits as *Ready to train*. One finishing in the background no
+  longer closes the window you're working in.
+
 - **SplatWork Capture: sharper frames.** The shutter limit (default 1/250 s; now also 1/1000 s) caps the camera's
   auto-exposure for the whole session, in both modes, with ISO rising instead. Before, it was applied once when
   exposure locked: ARKit could undo it (a capture ran at 1/91 s, ISO 50), and Stereo mode had no limit at all

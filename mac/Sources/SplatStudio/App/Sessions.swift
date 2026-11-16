@@ -177,8 +177,20 @@ final class TrainingSession {
 
     /// - Parameter resume: an interrupted run of this project: same settings, devices and result file; continues
     ///   from this Mac's checkpoint, reuses finished blocks, or (a single worker job) starts that job again.
-    func start(dataset: PreparedDataset, resume: ProjectRecord.Training? = nil) {
+    /// Where and how a run trains, as set in the Training step.
+    struct Settings {
+        var config: TrainingConfig, customised: Bool, placement: ComputePlacement, deviceIds: Set<String>?, workerId: String?
+    }
+    var settings: Settings { Settings(config: config, customised: customised, placement: placement, deviceIds: deviceIds, workerId: workerId) }
+
+    func start(dataset: PreparedDataset, resume: ProjectRecord.Training? = nil, with s: Settings? = nil) {
         guard !isActive else { return }
+        if let s, resume == nil {
+            config = s.config; customised = s.customised
+            suppressDeviceSave = true
+            placement = s.placement; deviceIds = s.deviceIds; workerId = s.workerId
+            suppressDeviceSave = false
+        }
         self.dataset = dataset; liveScene = nil; finishedUnseen = false
         trainer = nil        // a stopped or failed run's trainer: its splats and GPU memory must not carry over
         runGeneration += 1
@@ -771,8 +783,12 @@ extension TrainingConfig {
 /// Dataset-preparation state for the New Project flow.
 @MainActor
 @Observable
-final class PrepSession {
+final class PrepSession: Identifiable {
+    let id = UUID()
     weak var app: AppModel?
+    /// The training settings when this run started: another project set up meanwhile (in the shared Training step)
+    /// mustn't change where or how this one trains.
+    private var trainSettings: TrainingSession.Settings?
     var progress = PipelineProgress(stage: "", fraction: 0, message: "")
     var running = false
     var error: String? = nil
@@ -1058,6 +1074,7 @@ final class PrepSession {
         runID += 1
         let myRun = runID
         self.projectDir = projectDir; lastRun = (source, options, thenTrain); recordedStage = nil
+        trainSettings = app?.training.settings
         try? FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
         ProjectLibrary.shared.update(projectDir) { r in
             r.source = source; r.options = options; r.trainAfter = thenTrain
@@ -1110,7 +1127,7 @@ final class PrepSession {
                     }
                 }
                 if pipelineReady == nil, !cp.isDone(fingerprint: doneFP), let w = worker, let id = workerId,
-                   let info = try? await w.info(timeout: 10), let training = self?.app?.training {
+                   let info = try? await w.info(timeout: 10), let training = self?.trainSettings ?? self?.app?.training.settings {
                     let trainWorker = training.workerId ?? WorkerBrowser.shared.workers.first?.id
                     let same = thenTrain && training.placement == .remote && trainWorker == id
                     if let why = RemotePipeline.ineligibility(source: source, options: options, dir: dsDir, info: info, trainOnSameWorker: same) {
@@ -1154,9 +1171,19 @@ final class PrepSession {
                     // The worker trains it already: follow that job (opening the dataset re-attaches to it).
                     TrainingSession.adoptPipelineTraining(project: projectDir, dataset: leveled, record: pt.record, jobId: pt.jobId, datasetId: pt.datasetId)
                 }
-                self.app?.openDataset(leveled.root)
-                self.app?.showNewProject = false
-                if thenTrain && pipelineTraining == nil { self.app?.training.start(dataset: leveled) }
+                // Only the project the sheet shows takes over the window; one finishing in the background leaves the
+                // sheet (perhaps a new project being set up) and the viewer alone.
+                let shown = self.app?.prep === self
+                let busyTraining = self.app?.training.isActive == true
+                if shown || !(self.app?.showNewProject ?? false) && !busyTraining { self.app?.openDataset(leveled.root) }
+                if shown { self.app?.showNewProject = false }
+                if thenTrain && pipelineTraining == nil {
+                    if busyTraining {
+                        self.appendLog("Another project is training: this one is ready to train — start it from its project page when that run finishes")
+                    } else {
+                        self.app?.training.start(dataset: leveled, with: self.trainSettings)
+                    }
+                }
             } catch {
                 guard let self, self.runID == myRun else { return }
                 self.running = false; self.stopping = false

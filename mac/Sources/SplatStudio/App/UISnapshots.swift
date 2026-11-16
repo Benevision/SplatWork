@@ -88,7 +88,7 @@ enum UISnapshots {
                 ("prep-cameras", camDir, local, head + [(P("Camera poses", 0.6, "mapping: registered 941 images"), 900), (P("Finalising dataset", 0.97, "levelling and centring"), 0)]),
             ]
             for (name, dir, o, lines) in pages {
-                p.append(Page(name: name, apply: { m in m.prep.simulateForSnapshot(project: dir, source: src, options: o, lines: lines); m.showNewProject = true },
+                p.append(Page(name: name, apply: { m in m.prep.simulateForSnapshot(project: dir, source: src, options: o, lines: lines); m.show(prep: m.prep) },
                               undo: { m in m.showNewProject = false; m.prep.endSimulation() }, wait: 4))
             }
         }

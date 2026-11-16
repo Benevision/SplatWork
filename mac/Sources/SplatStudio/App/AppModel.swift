@@ -18,7 +18,16 @@ final class AppModel {
     /// Live view of a job running on a Linux worker (Compute → Watch).
     let remoteWatch = RemoteJobWatcher()
     var showInspector = true
-    var showNewProject = false
+    var showNewProject = false {
+        didSet {
+            // Opening New Project while the shown preparation is still running starts a new project alongside it
+            // (that one keeps preparing; its toolbar pill or project page shows it again). Showing a run's progress
+            // goes through show(prep:).
+            if showNewProject && !oldValue && !showingPrep { prepForNewProject() }
+            if !showNewProject { showingPrep = false }
+        }
+    }
+    @ObservationIgnored private var showingPrep = false
     var newProjectSource: SourceDescription? = nil
     /// A project whose saved settings the New Project sheet opens with (Change Settings on the project page).
     var newProjectPrefill: URL? = nil
@@ -138,7 +147,31 @@ final class AppModel {
         if let root, let ds = training.dataset, root.standardizedFileURL == ds.root.standardizedFileURL { return }
         followingTraining = false
     }
-    let prep = PrepSession()
+    /// Every preparation run: several projects can prepare at once (e.g. one uploading to a worker, one on this Mac).
+    private(set) var preps: [PrepSession] = []
+    /// The preparation the New Project sheet shows.
+    private(set) var prep = PrepSession()
+
+    /// Makes `prep` a session free for a new project (an idle one, or a new one) when the shown one is running.
+    func prepForNewProject() {
+        guard prep.running else { return }
+        if let idle = preps.first(where: { !$0.running && $0.error == nil }) { prep = idle; return }
+        let p = PrepSession(); p.app = self; preps.append(p); prep = p
+    }
+
+    /// Opens the New Project sheet on `p`'s progress.
+    func show(prep p: PrepSession) {
+        prep = p
+        showingPrep = true
+        showNewProject = true
+    }
+
+    /// The preparation running for a project, if any.
+    func prep(for project: URL) -> PrepSession? {
+        preps.first { $0.running && $0.projectDir?.standardizedFileURL == project.standardizedFileURL }
+    }
+
+    var anyPrepRunning: Bool { preps.contains { $0.running } }
 
     init() {
         do { renderer = try SplatRenderer() } catch { fatalError("Renderer failed: \(error)") }
@@ -148,6 +181,7 @@ final class AppModel {
         training.app = self
         remoteWatch.app = self
         prep.app = self
+        preps = [prep]
         // A project processed and trained as one job on a worker while the app was closed: follow it again
         // (after a moment, so workers are discovered first).
         Task { @MainActor [weak self] in

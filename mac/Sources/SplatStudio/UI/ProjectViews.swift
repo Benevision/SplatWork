@@ -36,10 +36,9 @@ struct ProjectStatus {
     @MainActor
     static func of(_ p: ProjectSummary, app: AppModel) -> ProjectStatus {
         guard p.exists else { return ProjectStatus(kind: .missing, title: "Folder not found", detail: p.url.path) }
-        let prepLive = app.prep.running && app.prep.projectDir?.standardizedFileURL == p.url.standardizedFileURL
-        if prepLive {
-            let stage = app.prep.progress.stage.isEmpty ? "Starting" : app.prep.progress.stage
-            return ProjectStatus(kind: .processing, title: "Processing · \(Int(app.prep.overall * 100)) %", detail: stage)
+        if let live = app.prep(for: p.url) {
+            let stage = live.progress.stage.isEmpty ? "Starting" : live.progress.stage
+            return ProjectStatus(kind: .processing, title: "Processing · \(Int(live.overall * 100)) %", detail: stage)
         }
         if let pr = p.record?.prep, pr.state != .finished {
             if pr.state == .running, let job = PipelineJobRecord.load(p.url) {
@@ -180,12 +179,9 @@ struct ProjectPage: View {
                 }
             }
             if [.processingStopped, .processingFailed, .empty].contains(st.kind), p.canResumeProcessing {
-                ProcessingDevicePicker(options: $options).disabled(model.prep.running)
+                ProcessingDevicePicker(options: $options)
             }
             HStack(spacing: 10) { actions(p, st) }
-            if model.prep.running, st.kind != .processing, [.processingStopped, .processingFailed, .empty].contains(st.kind) {
-                Text("Another project is being processed; this one can resume when it finishes.").font(.caption).foregroundStyle(.secondary)
-            }
             if model.training.isActive, st.kind == .trainingStopped || st.kind == .ready || st.kind == .trained {
                 Text("Another project is training; stop it to train this one.").font(.caption).foregroundStyle(.secondary)
             }
@@ -199,15 +195,17 @@ struct ProjectPage: View {
     @ViewBuilder private func actions(_ p: ProjectSummary, _ st: ProjectStatus) -> some View {
         switch st.kind {
         case .processing:
-            Button("Show Progress") { model.showNewProject = true }.buttonStyle(.borderedProminent)
-            Button(model.prep.stopping ? "Stopping…" : "Stop", role: .destructive) { model.prep.cancel() }.disabled(model.prep.stopping)
+            if let live = model.prep(for: p.url) {
+                Button("Show Progress") { model.show(prep: live) }.buttonStyle(.borderedProminent)
+                Button(live.stopping ? "Stopping…" : "Stop", role: .destructive) { live.cancel() }.disabled(live.stopping)
+            }
         case .processingStopped, .processingFailed, .empty:
             if p.canResumeProcessing {
                 Button(PipelineJobRecord.load(p.url) != nil ? "Reconnect to the Worker Job"
                        : st.kind == .empty && p.checkpoints.isEmpty ? "Start Processing" : "Resume Processing") { resumeProcessing(redo: nil) }
-                    .buttonStyle(.borderedProminent).disabled(model.prep.running)
+                    .buttonStyle(.borderedProminent)
                 if st.kind == .processingFailed {
-                    Button("Change Settings…") { changeSettings() }.disabled(model.prep.running)
+                    Button("Change Settings…") { changeSettings() }
                 }
             }
             if p.datasetReady || FileManager.default.fileExists(atPath: p.datasetDir.appendingPathComponent(PreparedDataset.fileName).path),
@@ -245,14 +243,15 @@ struct ProjectPage: View {
 
     private func stagesSection(_ p: ProjectSummary) -> some View {
         let fps = p.record.flatMap { r in r.source.flatMap { s in r.options.map { PrepCheckpoints.fingerprints(s, $0) } } } ?? [:]
-        let live = model.prep.running && model.prep.projectDir?.standardizedFileURL == p.url.standardizedFileURL
-        let busy = model.prep.running || (model.training.isActive && model.training.projectDir?.standardizedFileURL == p.url.standardizedFileURL)
+        let livePrep = model.prep(for: p.url)
+        let live = livePrep != nil
+        let busy = live || (model.training.isActive && model.training.projectDir?.standardizedFileURL == p.url.standardizedFileURL)
         return PanelSection(title: "Processing", systemImage: "list.bullet.rectangle") {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(PrepStage.allCases, id: \.self) { s in
                     let e = p.checkpoints.first { $0.stage == s }?.entry
                     let current = e != nil && e?.fingerprint == fps[s]
-                    let running = live && PrepSessionStage.current(model.prep) == s
+                    let running = livePrep.map { PrepSessionStage.current($0) == s } ?? false
                     HStack(spacing: 10) {
                         Group {
                             if running { ProgressView().controlSize(.small) }
@@ -264,7 +263,7 @@ struct ProjectPage: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(s.title).font(.callout.weight(.medium))
                             Group {
-                                if running { Text(model.prep.progress.message.isEmpty ? model.prep.progress.stage : model.prep.progress.message) }
+                                if running, let lp = livePrep { Text(lp.progress.message.isEmpty ? lp.progress.stage : lp.progress.message) }
                                 else if let e { Text(e.summary + " · " + e.savedAt.formatted(date: .abbreviated, time: .shortened) + (current ? "" : " · settings or source changed since")) }
                                 else { Text("Not done yet") }
                             }
@@ -280,7 +279,7 @@ struct ProjectPage: View {
                 }
             }
             HStack {
-                Button("Change Settings…") { changeSettings() }.disabled(model.prep.running)
+                Button("Change Settings…") { changeSettings() }.disabled(live)
                 Text("Opens the project's settings; stages whose settings you don't change are reused.").font(.caption).foregroundStyle(.secondary)
             }
             .padding(.top, 4)
@@ -332,11 +331,15 @@ struct ProjectPage: View {
     // MARK: actions
 
     private func resumeProcessing(redo: PrepStage?) {
-        model.prep.resume(project: url, redo: redo, workerId: options.compute == .thisMac ? nil : options.remoteWorkerId)
-        model.showNewProject = true
+        guard model.prep(for: url) == nil else { return }
+        model.prepForNewProject()          // alongside any other project that is preparing
+        let p = model.prep
+        p.resume(project: url, redo: redo, workerId: options.compute == .thisMac ? nil : options.remoteWorkerId)
+        model.show(prep: p)
     }
 
     private func changeSettings() {
+        model.prepForNewProject()
         model.prep.reset()        // a failed run's page would otherwise open instead of the settings
         model.newProjectSource = ProjectRecord.load(url)?.source
         model.newProjectPrefill = url

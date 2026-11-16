@@ -28,7 +28,7 @@ struct SplatStudioApp: App {
                     CaptureReceiverHolder.shared.receiver.onCapture = { _ in NSSound(named: "Purr")?.play() }
                     AppUpdater.shared.isBusy = { [weak model] in
                         guard let model else { return false }
-                        return model.training.isActive || model.prep.running || MacWorker.shared.isTraining
+                        return model.training.isActive || model.anyPrepRunning || MacWorker.shared.isTraining
                     }
                     AppUpdater.shared.startAutomaticChecks()
                 }
