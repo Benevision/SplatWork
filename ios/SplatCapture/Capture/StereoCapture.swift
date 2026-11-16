@@ -97,6 +97,12 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
     private var depthEnabled = false
     private var calibrationEnabled = false
     private var gdc = true
+    private var observers: [NSObjectProtocol] = []
+    private var fallbacks = 0
+    private var zoomed = false
+
+    /// Xcode console line (Run → Console), so a failing camera can be diagnosed from the phone.
+    private func log(_ s: String) { print("[SplatWork Stereo] \(s)") }
 
     // recording state (queue)
     private var recording: Recording?
@@ -151,7 +157,9 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
         photoOutput.maxPhotoQualityPrioritization = .balanced
         try dev.lockForConfiguration()
         // Frame and depth on the wide camera (the dual-wide device shows the ultra-wide below its switch-over zoom).
-        if let z = dev.virtualDeviceSwitchOverVideoZoomFactors.first?.doubleValue { dev.videoZoomFactor = CGFloat(z) }
+        if fallbacks < 2, let z = dev.virtualDeviceSwitchOverVideoZoomFactors.first?.doubleValue {
+            dev.videoZoomFactor = CGFloat(z); zoomed = true
+        }
         // The calibration (intrinsics, the lenses' offset) describes the uncorrected lens; some phones only deliver it
         // with iOS's distortion correction off. Try with it on (straighter ultra-wide photos) first.
         if !photoOutput.isCameraCalibrationDataDeliverySupported, dev.isGeometricDistortionCorrectionSupported {
@@ -159,7 +167,7 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
         }
         gdc = dev.isGeometricDistortionCorrectionSupported ? dev.isGeometricDistortionCorrectionEnabled : false
         calibrationEnabled = photoOutput.isCameraCalibrationDataDeliverySupported
-        if wantDepth, session.canAddOutput(depthOutput) {
+        if wantDepth, fallbacks == 0, session.canAddOutput(depthOutput) {
             let formats = dev.activeFormat.supportedDepthDataFormats.filter {
                 let t = CMFormatDescriptionGetMediaSubType($0.formatDescription)
                 return t == kCVPixelFormatType_DepthFloat16 || t == kCVPixelFormatType_DisparityFloat16
@@ -178,6 +186,51 @@ final class StereoCaptureEngine: NSObject, @unchecked Sendable {
         if let c = photoOutput.connection(with: .video), c.isVideoRotationAngleSupported(0) { c.videoRotationAngle = 0 }
         device = dev
         configured = true
+        log("configured: calibration \(calibrationEnabled ? "on" : "off"), distortion correction \(gdc ? "on" : "off"), "
+            + "depth \(depthEnabled ? "on" : "off"), zoom \(dev.videoZoomFactor), format \(dev.activeFormat.formatDescription.dimensions)")
+        watchSession()
+    }
+
+    /// Runtime errors and interruptions used to stop the preview silently (a frozen frame). Log them, and on a runtime
+    /// error fall back step by step — without the depth stream, then without the wide-camera zoom — and restart.
+    private func watchSession() {
+        guard observers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil) { [weak self] n in
+            let e = n.userInfo?[AVCaptureSessionErrorKey] as? NSError
+            let text = e.map { "\($0.domain) \($0.code): \($0.localizedDescription)" } ?? "unknown"
+            guard let self else { return }
+            self.queue.async { self.recover(text) }
+        })
+        observers.append(nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) { [weak self] n in
+            let reason = (n.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
+            self?.log("interrupted (reason \(reason))")
+            if reason == AVCaptureSession.InterruptionReason.videoDeviceInUseByAnotherClient.rawValue {
+                self?.onError?("The camera is in use by something else (another app, or the LiDAR mode still closing). Switch modes again or reopen the app.")
+            }
+        })
+        observers.append(nc.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: nil) { [weak self] _ in
+            guard let self else { return }
+            self.log("interruption ended")
+            self.queue.async { if !self.session.isRunning { self.session.startRunning() } }
+        })
+    }
+
+    private func recover(_ error: String) {
+        log("runtime error: \(error)")
+        guard fallbacks < 2, let dev = device else {
+            onError?("The camera stopped (\(error)). Stereo capture may not work on this iPhone.")
+            return
+        }
+        fallbacks += 1
+        session.beginConfiguration()
+        if depthEnabled { session.removeOutput(depthOutput); depthEnabled = false; log("fallback: depth stream off") }
+        if fallbacks >= 2, zoomed, (try? dev.lockForConfiguration()) != nil {
+            dev.videoZoomFactor = 1; zoomed = false; dev.unlockForConfiguration(); log("fallback: zoom 1×")
+        }
+        session.commitConfiguration()
+        session.startRunning()
+        if fallbacks == 1 { onError?("This iPhone can't stream stereo depth while taking photos from both cameras, so pairs are recorded without the depth map.") }
     }
 
     // MARK: Recording
