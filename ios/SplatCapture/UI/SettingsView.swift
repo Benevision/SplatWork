@@ -105,7 +105,7 @@ struct SettingsView: View {
                     }
                     Explained("Slowest shutter the camera may use, in both modes and whether or not exposure locks; ISO rises to keep the brightness. Motion blur ruins splats (and blurry frames get skipped, leaving gaps), while sensor noise is random in every frame and averages out across views — so faster is usually better. At walking pace 1/60 s smears about 11 px, 1/250 s about 3 px. In very dim rooms the camera may hit its ISO limit and frames get darker. Default: 1/250 s.") {
                         Picker("Shutter limit", selection: s.maxShutterSeconds) {
-                            Text("Auto").tag(0.0)
+                            Text("No limit (blurs in dim light)").tag(0.0)
                             Text("1/120 s").tag(1.0 / 120)
                             Text("1/250 s").tag(1.0 / 250)
                             Text("1/500 s").tag(1.0 / 500)
