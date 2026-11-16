@@ -55,7 +55,7 @@ def test_camera_solve_on_the_worker_and_masks_it_lacks_here(tmp_path, workers, f
     p.run()
     assert ("done", {"output": None, "dataset": proj.dataset_dir}) in events or any(k == "done" for k, _ in events), \
         [e for e in events if e[0] in ("failed", "log")][-5:]
-    log = (proj.root / "prep.log").read_text()
+    log = (proj.root / "prep.log").read_text(encoding="utf-8")
     assert f"processing on {dev.name}" in log
     assert f"{dev.name} doesn't have person — masks (person) on this PC" in log
     local_tasks = [c.spec.get("task") for c in lback.contexts if c.kind == "process"]
@@ -80,7 +80,7 @@ def test_offline_worker_means_this_pc(tmp_path, workers, fake_splatprep, monkeyp
     p.train_enabled = False
     p._titles = [t for t in p._titles if t != "Training"]
     p.run()
-    log = (proj.root / "prep.log").read_text()
+    log = (proj.root / "prep.log").read_text(encoding="utf-8")
     assert "isn't on the network — preparing the dataset on this PC" in log
     assert [c.spec.get("task") for c in lback.contexts if c.kind == "process"] == ["sfm"]
 
@@ -119,9 +119,7 @@ def test_choices_and_slots():
                                   {"id": "vk:x", "kinds": ["train"], "slow": True}], "gpus": [{"name": "RTX"}]})
     trains = D.Device(id="b", name="Box", host="h", port=2, status="online", info={"capabilities": ["train"]})
     off = D.Device(id="c", name="Old", host="h", port=3, status="offline")
-    from splatworker.gui.gtk.studio import devices_page  # noqa: F401 - needs GTK
-
-    assert devices_page.process_on_choices(R([on, trains, off])) == [
+    assert remote_prep.process_on_choices(R([on, trains, off])) == [
         ("local", "This PC"), ("a", "BensPC"), ("b", "Box (can't process)"), ("c", "Old (offline)")]
     assert on.slots == 2                                          # the 610M counts from 1.7.8
     on.info["workerVersion"] = "1.7.7"
@@ -152,7 +150,7 @@ def test_same_worker_runs_the_whole_pipeline(tmp_path, workers):  # noqa: F811
     done = [d for k, d in events if k == "done"]
     out = done[-1]["output"]
     assert out is not None and Path(out).is_file() and formats.load(out).count > 0
-    log = (proj.root / "prep.log").read_text()
+    log = (proj.root / "prep.log").read_text(encoding="utf-8")
     assert f"whole pipeline on {dev.name}" in log and "downloading the prepared dataset" in log
     assert rback.tasks[:1] == ["frames"] and "sfm" in rback.tasks
     assert not [c for c in lback.contexts]                                  # nothing ran on this PC's server

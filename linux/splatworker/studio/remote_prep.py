@@ -89,6 +89,20 @@ def missing_models(info: Optional[Dict[str, Any]], mask_models: Sequence[str], s
     return [m for m in dict.fromkeys(need) if m not in have]
 
 
+def process_on_choices(reg):
+    """("local", "This PC") and every known worker: "name", "name (can't process)", "name (offline)"."""
+    choices = [("local", "This PC")]
+    for d in reg.devices() if reg is not None else []:
+        if d.kind != "linux" and not d.online:
+            continue
+        if d.online:
+            label = d.name if "process" in d.capabilities else f"{d.name} (can't process)"
+        else:
+            label = f"{d.name} (offline)"
+        choices.append((d.id, label))
+    return choices
+
+
 def find_device(registry, device_id: str, wait: float = FIND_SECONDS, sleep=time.sleep):
     """The chosen worker once it answers (checked again for up to ``wait`` s), else None."""
     end = time.monotonic() + wait

@@ -9,6 +9,7 @@ from typing import Optional
 from gi.repository import Adw, GLib, Gtk
 
 from ....studio.devices import Device, parse_address
+from ....studio.remote_prep import process_on_choices
 from .pages import _page
 from .rows import combo_row, group, plain_row
 
@@ -186,20 +187,6 @@ class DevicesPage(Gtk.Box):
 PREP_LOCAL_CAPTION = "Frames, masks and camera solving run on this PC."
 PREP_WORKER_CAPTION = ("Video splitting, masks and camera solving run on the worker; only what changed is sent back "
                        "and forth. Steps it can't do run on this PC.")
-
-
-def process_on_choices(reg):
-    """("local", "This PC") and every known worker: "name", "name (can't process)", "name (offline)"."""
-    choices = [("local", "This PC")]
-    for d in reg.devices() if reg is not None else []:
-        if d.kind != "linux" and not d.online:
-            continue
-        if d.online:
-            label = d.name if "process" in d.capabilities else f"{d.name} (can't process)"
-        else:
-            label = f"{d.name} (offline)"
-        choices.append((d.id, label))
-    return choices
 
 
 def process_on_row(controller, options, on_change=None) -> Adw.ComboRow:
