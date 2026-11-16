@@ -14,6 +14,7 @@ import re
 import numpy as np
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
@@ -161,14 +162,87 @@ def unavailable_message() -> str:
             f" [{mapper_diagnostics()}]")
 
 
+# A tool (COLMAP, GLOMAP …) using more than this share of the computer's memory is stopped with an error instead of
+# being left to run the whole system out of memory: on 2026-11-16 COLMAP's feature extractor reached 15 GB on a 24 GB
+# Mac and the kernel panicked (watchdog, compressor and swap full). SPLATPREP_CHILD_MEMORY_FRACTION overrides it.
+CHILD_MEMORY_FRACTION = 0.6
+
+
+def _total_memory() -> int:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return 0
+
+
+def _resident_bytes(pid: int) -> int:
+    """Resident memory of a process (Linux /proc, else ps); 0 when it can't be read (e.g. Windows)."""
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for ln in f:
+                if ln.startswith("VmRSS:"):
+                    return int(ln.split()[1]) * 1024
+    except OSError:
+        pass
+    if sys.platform == "win32":
+        return 0
+    try:
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout.strip()
+        return int(out) * 1024 if out else 0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+class _MemoryGuard:
+    """Polls a child's resident memory; kills it when it passes the limit and remembers why."""
+
+    def __init__(self, proc: subprocess.Popen, name: str):
+        self.proc, self.name, self.peak, self.tripped = proc, name, 0, False
+        frac = float(os.environ.get("SPLATPREP_CHILD_MEMORY_FRACTION", CHILD_MEMORY_FRACTION))
+        total = _total_memory()
+        self.limit = int(total * frac) if total and frac > 0 else 0
+        self.total = total
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True) if self.limit else None
+        if self._t:
+            self._t.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(1.0):
+            if self.proc.poll() is not None:
+                return
+            rss = _resident_bytes(self.proc.pid)
+            self.peak = max(self.peak, rss)
+            if rss > self.limit:
+                self.tripped = True
+                try:
+                    self.proc.kill()
+                except OSError:
+                    pass
+                return
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def message(self) -> str:
+        gb = 1 << 30
+        return (f"{self.name} was stopped: it used {self.peak / gb:.1f} GB of this computer's {self.total / gb:.0f} GB memory "
+                f"(limit {self.limit / gb:.1f} GB), which would have made the whole system run out of memory. "
+                f"Use fewer or smaller photos, or process on a computer with more memory.")
+
+
 def run_logged(cmd: Sequence[str], log_path: Optional[Path], on_line: Optional[Callable[[str], None]] = None, cwd=None) -> None:
-    """Run a subprocess, appending stdout/stderr to log_path; never writes to our stdout."""
+    """Run a subprocess, appending stdout/stderr to log_path; never writes to our stdout. A child that grows past
+    CHILD_MEMORY_FRACTION of the computer's memory is stopped (SplatPrepError) before it can exhaust the system."""
     log = open(log_path, "a") if log_path else None
+    guard = None
     try:
         if log:
             log.write("$ " + " ".join(map(str, cmd)) + "\n")
             log.flush()
         proc = subprocess.Popen(list(map(str, cmd)), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd, bufsize=1)
+        name = f"{Path(cmd[0]).name} {cmd[1] if len(cmd) > 1 else ''}".strip()
+        guard = _MemoryGuard(proc, name)
         tail: List[str] = []
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -179,9 +253,16 @@ def run_logged(cmd: Sequence[str], log_path: Optional[Path], on_line: Optional[C
             if on_line:
                 on_line(line)
         rc = proc.wait()
+        guard.stop()
+        if guard.tripped:
+            if log:
+                log.write(guard.message() + "\n")
+            raise SplatPrepError(guard.message())
         if rc != 0:
-            raise SplatPrepError(f"{Path(cmd[0]).name} {cmd[1] if len(cmd) > 1 else ''} failed (exit {rc}): " + "".join(tail[-8:]).strip())
+            raise SplatPrepError(f"{name} failed (exit {rc}): " + "".join(tail[-8:]).strip())
     finally:
+        if guard:
+            guard.stop()
         if log:
             log.close()
 

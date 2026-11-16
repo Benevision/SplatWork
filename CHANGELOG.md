@@ -21,6 +21,17 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
   can't do run on this PC: a model it doesn't have (the dialog says which), or an error while splitting or masking.
   A worker that doesn't answer within 20 s means this PC. The project shows "processed on …". Block-parallel
   training from the Studio now gives a Linux worker on 1.7.8 or newer one block per training GPU, as the Mac does.
+- **Fixed: preparing a large photo set could run the Mac out of memory and crash it.** COLMAP's feature extraction
+  (used for photos, and to refine iPhone captures) ran on every core, and each thread needs about half a gigabyte for
+  a 1600 px photo, more for bigger ones. On 431 high-resolution iPhone stills it reached 15 GB, and a 24 GB Mac ran
+  out of memory and swap and restarted (kernel panic). Three changes:
+  - COLMAP now gets photos at the size it extracts at (results are scaled back to full size).
+  - Its thread count is capped at about a fifth of the computer's memory.
+  - Every tool splatprep runs is stopped with a clear error if it passes 60 % of the memory, rather than taking the
+    system down.
+
+  The same 431 photos now peak at 4.4 GB.
+
 - **The crop box can be turned.** *Edit → Crop box → Rotation*: X, Y and Z sliders turn the box about its centre, for
   scenes that don't line up with the axes (a van parked at an angle). *Fit to scene* fits the box along its own turned
   axes, and *Reset rotation* squares it up again. Hiding, *Apply crop* and the box outline all follow the rotation.

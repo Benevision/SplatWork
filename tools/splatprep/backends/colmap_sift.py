@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List
 
 from ..mapper import find_executable, pick_option, run_logged, run_mapper
+from .colmap_small import extraction_threads, max_side, restore_full_size, small_copies
 from ..pairs import select_pairs, write_pairs_txt
 from .base import Availability, Backend, SfMContext, SfMOutput, camera_model_name
 
@@ -71,16 +72,28 @@ class ColmapSiftBackend(Backend):
         def opt(cmd: str, *names: str):
             return pick_option(colmap, cmd, *names)
 
-        cmd: List[str] = [colmap, "feature_extractor", "--database_path", str(db), "--image_path", str(ctx.image_dir)]
+        # COLMAP's CPU SIFT needs ~0.55 GB per thread at 1600 px and more on bigger photos: on all 12 cores with
+        # 431 photos of 2400×1800 it reached 15 GB and ran a 24 GB Mac out of memory into a kernel panic. So large
+        # photos go in as copies at the size it extracts at (keypoints and cameras are scaled back to full size
+        # afterwards), and the thread count is capped by the computer's memory (extraction_threads).
+        resize_max = int(ctx.opt("resizeMax", 1600))
+        small = small_copies(ctx.image_dir, ctx.names, ctx.masks_dir, ctx.work_dir / "colmap_small", resize_max)
+        img_dir, mask_dir = (small.image_dir, small.mask_dir) if small else (ctx.image_dir, ctx.masks_dir)
+        list_path.write_text("\n".join(small.names[n] for n in ctx.names) if small else "\n".join(ctx.names))
+        if small:
+            ctx.progress.update("features", 0.03, f"made {len(small.scales)} copies at {resize_max} px for COLMAP")
+        cmd: List[str] = [colmap, "feature_extractor", "--database_path", str(db), "--image_path", str(img_dir)]
         cmd += ["--image_list_path", str(list_path)]
         cmd += ["--ImageReader.camera_model", camera_model_name(ctx.request)]
         cmd += ["--ImageReader.single_camera", "1" if ctx.opt("singleCamera", True) else "0"]
-        if ctx.masks_dir is not None:
-            cmd += ["--ImageReader.mask_path", str(ctx.masks_dir)]
+        if mask_dir is not None:
+            cmd += ["--ImageReader.mask_path", str(mask_dir)]
         for names, val in (
             (("FeatureExtraction.use_gpu", "SiftExtraction.use_gpu"), use_gpu),
             (("FeatureExtraction.max_image_size", "SiftExtraction.max_image_size"), str(int(ctx.opt("resizeMax", 1600)))),
             (("SiftExtraction.max_num_features",), str(int(ctx.opt("maxKeypoints", 8192)))),
+            (("FeatureExtraction.num_threads", "SiftExtraction.num_threads"),
+             str(extraction_threads(min(resize_max, small.max_side if small else max_side(ctx.image_dir, ctx.names))))),
         ):
             o = opt("feature_extractor", *names)
             if o:
@@ -96,6 +109,8 @@ class ColmapSiftBackend(Backend):
                     ctx.progress.update("features", min(1.0, counter[0] / n), f"extracted {counter[0]}/{n}")
 
         run_logged(cmd, ctx.log_path, on_feat)
+        if small:
+            restore_full_size(db, small)
         ctx.progress.update("features", 1.0, "features done")
 
         strategy = (ctx.opt("matching", "auto") or "auto").lower()
