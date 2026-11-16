@@ -31,6 +31,9 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
     system down.
 
   The same 431 photos now peak at 4.4 GB.
+  Feature extraction shows its progress again ("extracted 377/431"): COLMAP 4 prefixes its log lines, and
+  splatprep didn't recognise them, so the bar stood still for the whole step. The thread cap allows 30 % of the
+  memory (5 threads for 2400 px photos on a 24 GB Mac, about 6 GB) instead of 20 % (3 threads).
 
 - **The crop box can be turned.** *Edit → Crop box → Rotation*: X, Y and Z sliders turn the box about its centre, for
   scenes that don't line up with the axes (a van parked at an angle). *Fit to scene* fits the box along its own turned

@@ -25,7 +25,7 @@ SMALL_COPY_FACTOR = 1.15
 # COLMAP CPU SIFT memory per thread at 1600 px (measured: 4 threads 2.2 GB, 12 threads 6.5 GB), scaling with
 # the pixel count; extraction may use this share of the computer's memory
 SIFT_GB_PER_THREAD_1600 = 0.55
-EXTRACTION_MEMORY_SHARE = 0.2
+EXTRACTION_MEMORY_SHARE = 0.3
 
 # COLMAP camera model id → number of focal-length parameters (then cx, cy)
 _FOCALS = {0: 1, 1: 2, 2: 1, 3: 1, 4: 2, 5: 2, 6: 2, 7: 2, 8: 1, 9: 1, 10: 2}

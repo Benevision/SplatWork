@@ -64,6 +64,12 @@ def test_memory_guard_stops_a_runaway_child(tmp_path, monkeypatch):
 
 def test_extraction_threads_follow_memory():
     gb = 1 << 30
-    assert extraction_threads(1600, 24 * gb, 12) == 8        # ~4.4 GB on a 24 GB Mac (was 12 threads, 6.5 GB)
+    assert extraction_threads(1600, 24 * gb, 12) == 12       # ≤ 7.2 GB on a 24 GB Mac at 1600 px
+    assert extraction_threads(2400, 24 * gb, 12) == 5        # 2400 px: ~6.2 GB (12 threads reached 15 GB → panic)
     assert extraction_threads(1600, 96 * gb, 32) == 32
     assert extraction_threads(3200, 8 * gb, 8) == 1
+
+def test_colmap4_progress_lines_are_counted():
+    from splatprep.backends.colmap_sift import _PROCESSED
+    m = _PROCESSED.search("I20261116 15:24:49.891 0x16d4cb000 feature_extraction.cc:270] Processed file [377/431]")
+    assert m and m.group(1) == "377" and m.group(2) == "431"

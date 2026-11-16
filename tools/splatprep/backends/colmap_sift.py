@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import List
 
 from ..mapper import find_executable, pick_option, run_logged, run_mapper
+import re
+
 from .colmap_small import extraction_threads, max_side, restore_full_size, small_copies
 from ..pairs import select_pairs, write_pairs_txt
 from .base import Availability, Backend, SfMContext, SfMOutput, camera_model_name
@@ -41,6 +43,9 @@ def gps_fraction(paths, sample: int = 20) -> float:
         except Exception:
             pass
     return hits / len(picked)
+
+
+_PROCESSED = re.compile(r"Processed file \[(\d+)/(\d+)\]")
 
 
 class ColmapSiftBackend(Backend):
@@ -103,10 +108,12 @@ class ColmapSiftBackend(Backend):
         counter = [0]
 
         def on_feat(line: str):
-            if line.startswith("Processed file") or "Features:" in line:
-                counter[0] += 1 if line.startswith("Processed file") else 0
-                if counter[0]:
-                    ctx.progress.update("features", min(1.0, counter[0] / n), f"extracted {counter[0]}/{n}")
+            # "Processed file [12/431]" — COLMAP 4 prefixes its log lines ("I20261116 … feature_extraction.cc:270] "),
+            # so match anywhere in the line (a startswith check never fired: no progress during extraction)
+            m = _PROCESSED.search(line)
+            if m:
+                counter[0] = max(counter[0], int(m.group(1)))
+                ctx.progress.update("features", min(1.0, counter[0] / n), f"extracted {counter[0]}/{n}")
 
         run_logged(cmd, ctx.log_path, on_feat)
         if small:
