@@ -6,6 +6,15 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.13 — camera solving where PyTorch has no GPU:** on a Steam Deck, integrated or older AMD
+  and Intel GPUs (anything PyTorch can't use), the default camera solve now uses COLMAP SIFT on the CPU instead of
+  SuperPoint + LightGlue, which took hours there. In a CPU test on 184 frames, COLMAP SIFT took 105 s and placed 138
+  photos. A feature model chosen explicitly is kept, with a time warning (`keepFeatures`). The job log, the
+  preparation screen and the setup assistant say "No GPU for processing (PyTorch can't use the …) — solving on the CPU
+  with COLMAP SIFT". `/v1/info` reports `"processing": {"device", "gpu", "reason"}`. Another computer looking at a
+  failed job of the desktop app is now told where its reason is (that PC's Jobs page and the project's prep.log),
+  instead of seeing no message, and the job's log answers 403 with the same pointer instead of "not found".
+  `docs/dev/GPU_PROCESSING.md` compares vendor-neutral GPU options for processing.
 - **SplatWork for Linux 1.7.12 — the whole run as one job on the worker:** when a project's processing and its
   training go to the same worker, the Studio now does what the Mac does: the photos (or the video) and every
   setting go up once, and that worker runs frame extraction, masks, the sky, the camera solve and training on its

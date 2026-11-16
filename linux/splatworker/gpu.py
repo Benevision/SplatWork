@@ -131,6 +131,39 @@ def torch_backend() -> str:
     return "cpu"
 
 
+_processing_cache: Dict = {}
+
+
+def processing_device(refresh: bool = False) -> Dict:
+    """Where dataset processing (PyTorch models in splatprep) runs here: {"device": "cuda" | "rocm" | "xpu" | "cpu",
+    "gpu": name or None, "reason": why not a GPU, or None}; checked once (importing PyTorch takes seconds)."""
+    if _processing_cache and not refresh:
+        return dict(_processing_cache)
+    dev = torch_backend()
+    gpu = None
+    reason = None
+    try:
+        from .gpu_vendors import best_non_nvidia, scan
+        from pathlib import Path
+
+        ads = scan(Path("/sys"))
+        nv = [a for a in ads if a.vendor == "nvidia"]
+        other = best_non_nvidia(ads)
+        gpu = (nv[0].name if nv else other.name if other else None)
+    except Exception:  # noqa: BLE001
+        pass
+    if dev == "cpu":
+        if importlib.util.find_spec("torch") is None:
+            reason = "the processing runtime isn't installed"
+        elif gpu:
+            reason = f"PyTorch can't use the {gpu}"
+        else:
+            reason = "no GPU found"
+    _processing_cache.clear()
+    _processing_cache.update(device=dev, gpu=gpu if dev != "cpu" else None, reason=reason, gpuName=gpu)
+    return dict(_processing_cache)
+
+
 def backend_description() -> str:
     try:
         from importlib.metadata import version

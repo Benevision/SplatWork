@@ -25,11 +25,12 @@ Extra (optional) request keys understood here, beyond §6:
 from __future__ import annotations
 
 import json
+import os
 
 import shutil
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 import numpy as np
 
@@ -128,8 +129,50 @@ def align_to_priors(rec, priors: dict) -> Optional[dict]:
     return {**T.to_json(), "numCorrespondences": len(names), "inliers": int(inl.sum()), "rmse": float(np.sqrt(np.mean(res[inl] ** 2)))}
 
 
+# The feature model when processing has no GPU (PyTorch on the CPU): learned features (SuperPoint / LightGlue) are
+# far too slow there — a Steam Deck's camera solve ran for hours. Measured on 4 CPU threads, 184 video frames of a room
+# (docs/dev/GPU_PROCESSING.md): COLMAP SIFT 105 s with 138 photos placed, OpenCV SIFT 116 s with 41.
+CPU_FEATURES = "colmap_sift"
+CPU_FALLBACK = "opencv_sift"     # when pycolmap's SIFT isn't available
+LEARNED_DEFAULT = "superpoint_lightglue"
+CPU_SECONDS_PER_IMAGE = 10.0     # rough: learned features + sequential matching per photo on a 4-core CPU
+
+
+def cpu_features(req: dict, device: str, n_images: int) -> Tuple[str, Optional[str]]:
+    """(the feature model to use, a log line or None). With no GPU for processing, "auto" or the untouched default
+    (``keepFeatures`` not set) becomes :data:`CPU_FEATURES`; a learned model the user chose stays, with a time
+    warning. With a GPU, "auto" is the learned default."""
+    model = req.get("features") or LEARNED_DEFAULT
+    if device != "cpu":
+        return (LEARNED_DEFAULT if model == "auto" else model), None
+    gpu = os.environ.get("SPLATPREP_GPU_NAME")
+    why = f"PyTorch can't use the {gpu}" if gpu else "no GPU PyTorch can use"
+    if model in ("auto", LEARNED_DEFAULT) and not req.get("keepFeatures"):
+        for cpu_model in (CPU_FEATURES, CPU_FALLBACK):
+            try:
+                b = get_backend(cpu_model)
+                b.require(None)
+            except Exception:  # noqa: BLE001 - not installed: the next one, else keep the learned model
+                continue
+            label = b.display_name.split(" +")[0]
+            return cpu_model, f"No GPU for processing ({why}) — solving on the CPU with {label}"
+        return (LEARNED_DEFAULT if model == "auto" else model), None
+    try:
+        learned = "torch" in get_backend(model).python_modules
+    except Exception:  # noqa: BLE001
+        learned = False
+    if learned:
+        mins = max(1, round(n_images * CPU_SECONDS_PER_IMAGE / 60))
+        return model, (f"No GPU for processing ({why}): {model} on the CPU is slow — roughly {mins} min for "
+                       f"{n_images} photos. COLMAP SIFT would be much faster here.")
+    return model, None
+
+
 def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
-    model_id = req["features"]
+    device = select_device(req.get("device"))
+    _names_for_choice = list_images(_resolve(workdir, req["imagesDir"])) if _resolve(workdir, req["imagesDir"]) else []
+    model_id, cpu_note = cpu_features(req, device, len(_names_for_choice))
+    req = {**req, "features": model_id}
     backend = get_backend(model_id)
     image_dir = _resolve(workdir, req["imagesDir"])
     out_dir = _resolve(workdir, req["outputDir"])
@@ -161,7 +204,8 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
             skipped_takeoff = [n for i, n in enumerate(names) if i in drop]
             names = [n for i, n in enumerate(names) if i not in drop]
             sp.message("pairs", f"left out {len(skipped_takeoff)} take-off / landing photo(s) below {thr:.0f} m above take-off")
-    device = select_device(req.get("device"))
+    if cpu_note:
+        sp.message("pairs", cpu_note)
     sp.message("pairs", f"{model_id}: {len(names)} images, device {device}")
     ctx = SfMContext(
         image_dir=image_dir,

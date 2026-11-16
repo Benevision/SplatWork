@@ -286,6 +286,16 @@ def processing_profile_for(driver: DriverInfo) -> Optional[ProcessingGpuProfile]
 
 # ------------------------------------------------------------- choosing
 
+def cpu_processing_note(gpu) -> str:
+    """Setup's line when PyTorch gets no GPU: what camera solving does instead, and the manual way out."""
+    note = (f"No GPU for processing: PyTorch can't use the {gpu.name} here, so camera solving uses COLMAP SIFT on "
+            "the CPU (learned features would take hours there).")
+    if gpu.vendor == "amd":
+        note += (" PyTorch for ROCm can be tried under Advanced (experimental on integrated and older Radeon "
+                 "GPUs).")
+    return note
+
+
 VULKAN_WARNING = ("The Vulkan trainer is new: it hasn't been compared with the NVIDIA (gsplat) trainer on real GPUs "
                   "yet, so results and speed may differ. It is part of the app; nothing extra is downloaded for it. "
                   "Settings → Training → Trainer switches it off.")
@@ -353,10 +363,12 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None,
         if other is not None and driver.vulkan_trains:
             return ProfileChoice(CPU_PROFILE_ID, True,
                                  f"{other.name} trains with SplatWork's Vulkan trainer (experimental); dataset "
-                                 "processing runs on the CPU.", [VULKAN_WARNING])
+                                 "processing runs on the CPU.", [VULKAN_WARNING, cpu_processing_note(other)])
         if other is not None:
             summary = (f"Processing-only runtime: training isn't available on {other.name} yet, so processing "
                        "runs on the CPU.")
+            return ProfileChoice(CPU_PROFILE_ID, False, summary, [cpu_processing_note(other)],
+                                 blocking=problem[1] if problem else None)
         else:
             summary = "Processing-only runtime: no usable NVIDIA GPU was found, so training will not be available."
         return ProfileChoice(CPU_PROFILE_ID, False, summary, blocking=problem[1] if problem else None)

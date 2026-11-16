@@ -234,7 +234,9 @@ jobs (`/v1/process`) run in a CPU pool instead (`serve --cpu-jobs`, default 1; t
 of their own) and hold their GPU only around GPU stages — learned features / matching / retrieval, masks, 360°
 resampling — so a camera solve maps and adjusts on the CPU while another job trains. A GPU stage waits while the GPU
 is busy, unless training runs there and the GPU's free memory covers the stage; a queued training job goes first.
-`JobStatus` gains `"resource"`: `"cpu"`, `"gpu"` or `"waiting-gpu"` (the message then reads "<stage>: waiting for
+`/v1/info` (≥ 1.7.13) adds `"processing": {"device": "cuda"|"rocm"|"xpu"|"cpu", "gpu", "reason"}` (null without
+`process`); on `"cpu"` a camera solve whose `features` are `"auto"` or the default uses COLMAP SIFT unless the request
+says `"keepFeatures": true`. `JobStatus` gains `"resource"`: `"cpu"`, `"gpu"` or `"waiting-gpu"` (the message then reads "<stage>: waiting for
 the GPU"); `/v1/info` gains `"cpuJobs": {limit, running, leases: {slot: jobId}, waitingForGpu: [jobId]}`.
 
 **Pause / resume and checkpoints (worker ≥ 1.4.0, capability `pause`).**

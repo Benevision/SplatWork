@@ -122,6 +122,7 @@ class ProjectOptions:
     use_location: bool = True                # source.useLocation: imported photos keep their GPS (only that)
     solver: str = "learned"                  # sfm.solver: learned | poses (use poses from the source)
     features: str = "superpoint_lightglue"   # sfm.features
+    features_explicit: bool = False          # chosen in the dialog: kept even where processing has no GPU
     matching: str = "auto"                   # sfm.matching
     mapper: str = "auto"                     # sfm.mapper
     camera_model: str = "auto"               # sfm.cameraModel
@@ -218,6 +219,8 @@ class ProjectOptions:
         req: Dict[str, Any] = {"task": "sfm", "imagesDir": "images", "outputDir": "out",
                                "features": self.features, "matching": self.matching, "mapper": self.mapper,
                                "cameraModel": self.camera_model}
+        if self.features_explicit:
+            req["keepFeatures"] = True        # else splatprep may use SIFT where processing has no GPU
         if has_masks:
             req["masksDir"] = "masks"
         if has_sky:

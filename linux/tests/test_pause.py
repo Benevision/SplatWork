@@ -299,7 +299,7 @@ def test_lan_clients_cant_touch_or_read_the_apps_jobs(tmp_path):
     assert listed[mine]["state"] == "queued" and listed[mine]["origin"] == "local"
     assert listed[theirs]["origin"] == "192.168.0.20"
     assert {j["jobId"]: j for j in stranger.get("/v1/jobs", headers=REMOTE).json()}[theirs]["origin"] == "remote"
-    assert mac.get(f"/v1/jobs/{mine}/log", headers=REMOTE).status_code == 404
+    assert mac.get(f"/v1/jobs/{mine}/log", headers=REMOTE).status_code == 403     # 1.7.13: says where the log is
     assert mac.post(f"/v1/jobs/{mine}/cancel", headers=REMOTE).status_code == 403
     assert mac.delete(f"/v1/jobs/{mine}", headers=REMOTE).status_code == 403
     assert c.get("/v1/jobs", headers=LOCAL).json()[0]["name"] != "Job on this PC"

@@ -1239,7 +1239,16 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     from .gpu import backend_description, list_gpus
 
     backend = backend or SubprocessBackend(trainer=settings.trainer)
-    # job processes inherit it: splatprep's videodecode.py reads SPLATPREP_VIDEO_DECODE
+    # job processes inherit these: splatprep names the GPU when it solves on the CPU, and decodes video per setting
+    try:
+        from .gpu_vendors import best_non_nvidia, scan
+
+        _ads = scan(Path("/sys"))
+        _g = next((a for a in _ads if a.vendor == "nvidia"), None) or best_non_nvidia(_ads)
+        if _g is not None:
+            os.environ.setdefault("SPLATPREP_GPU_NAME", _g.name)
+    except Exception:  # noqa: BLE001
+        pass
     os.environ["SPLATPREP_VIDEO_DECODE"] = settings.video_decode if settings.video_decode in ("auto", "cpu") else "auto"
     for d in (settings.datasets_dir, settings.jobs_dir, settings.tmp_dir):
         d.mkdir(parents=True, exist_ok=True)
@@ -1277,6 +1286,11 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     async def lifespan(app: FastAPI):
         nonlocal advertiser
         manager.start()
+        from .gpu import processing_device
+        from .processing import splatprep_available
+
+        if splatprep_available():         # checked in the background: importing PyTorch takes a few seconds
+            threading.Thread(target=processing_device, daemon=True, name="splatworker-processing-device").start()
         if settings.mdns:
             from .discovery import Advertiser
 
@@ -1401,7 +1415,12 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         if "train" in caps and getattr(backend, "pausable", False):
             caps = caps + ["pause"]       # ≥ 1.4.0: POST /v1/jobs/{id}/pause|resume|checkpoint, checkpoint.ply
         if "train" in caps and "process" in caps:
-            caps = caps + ["pipeline"]    # ≥ 1.6.0: POST /v1/pipeline (whole pipeline, client may go offline)
+            caps = caps + ["pipeline"]
+        processing = None
+        if "process" in caps:      # ≥ 1.7.13: where processing runs ("cpu": camera solving with SIFT on the CPU)
+            from .gpu import processing_device
+
+            processing = processing_device()    # ≥ 1.6.0: POST /v1/pipeline (whole pipeline, client may go offline)
         if settings.local_enabled:
             caps = caps + ["local"]       # ≥ 1.4.0: POST /v1/datasets/local (the desktop app on this PC only)
         try:
@@ -1417,6 +1436,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             # memoryMB, busy}. A slow slot isn't in "gpus": it takes a train job that names it ("slot" in
             # POST /v1/jobs), or a standalone one (no region / cameraIds) while every fast slot is busy.
             "slots": [s.info(busy=s.key in manager.running or s.key in manager.leases) for s in manager.slots],
+            # ≥ 1.7.13: {"device": "cuda" | "rocm" | "xpu" | "cpu", "gpu", "reason"} — null without "process"
+            "processing": processing,
             # ≥ 1.7.6: processing jobs run in a CPU pool and take their GPU only for GPU steps (gpulease.py);
             # JobStatus "resource": "cpu" | "gpu" | "waiting-gpu"
             "cpuJobs": {"limit": max(1, int(settings.cpu_jobs)), "running": len(manager.cpu_running),
@@ -1860,7 +1881,11 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             return snap
         s = dict(snap)
         if s.get("origin") == "local":
-            s.update(name="Job on this PC", datasetId="", outputDatasetId=None, message=None)
+            # the desktop app's own job: no name, dataset or message text for other computers — but say where
+            # the reason is when it failed (its message can hold file and project names)
+            note = {"failed": "failed on that PC: the reason is on its Jobs page (Log) and in the project's prep.log",
+                    "cancelled": "cancelled on that PC"}.get(s.get("state"))
+            s.update(name="Job on this PC", datasetId="", outputDatasetId=None, message=note)
         elif s.get("origin") not in (None, me):
             s["origin"] = "remote"
         return s
@@ -2056,6 +2081,10 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
 
     @app.get("/v1/jobs/{job_id}/log")
     def get_log(job_id: str, request: Request):
+        job = manager.get(job_id)
+        if job.status.get("origin") == "local" and not _is_local(request):
+            raise ApiError(403, f"job {job_id} is the desktop app's own job on that PC: its log is there (Jobs page → "
+                                "Log, and the project's prep.log), not shared with other computers")
         path = _job_file(request, job_id, "train.log")
         text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
         return PlainTextResponse(text)

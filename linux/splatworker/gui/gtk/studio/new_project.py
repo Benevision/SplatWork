@@ -152,7 +152,9 @@ class NewProjectDialog(Adw.Window):
                                                       ("poses", "Use poses from the source")], o.solver,
                                     lambda v: setattr(o, "solver", v), "sfm.solver")
         cams.add(self.solver_row)
-        cams.add(combo_row("Feature model", FEATURES, o.features, lambda v: setattr(o, "features", v), "sfm.features"))
+        cams.add(combo_row("Feature model", FEATURES, o.features,
+                           lambda v: (setattr(o, "features", v), setattr(o, "features_explicit", True)),
+                           "sfm.features"))
         cams.add(combo_row("Pair selection", [("auto", "Automatic"), ("sequential", "Sequential (video)"),
                                               ("exhaustive", "Exhaustive"), ("retrieval", "Retrieval")],
                            o.matching, lambda v: setattr(o, "matching", v), "sfm.matching"))

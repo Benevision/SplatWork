@@ -81,6 +81,14 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.13" date="2026-11-16">
+      <description>
+        <p>Faster camera solving where the GPU can't run the processing models.</p>
+        <ul>
+          <li>On a Steam Deck and other GPUs PyTorch can't use, camera solving uses SIFT on the CPU instead of the learned features, which took hours there. The setup assistant and the job log say so.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.12" date="2026-11-16">
       <description>
         <p>When one worker prepares and trains a project, the whole run is a single job there.</p>
