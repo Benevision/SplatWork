@@ -100,6 +100,14 @@ Each item is a known defect with evidence; fix, measure, tick.
 - [ ] **MCMC collapse above about 1 M splats** (Issue Q1): see the register for evidence and the order of tests.
       Then choose the cap from the scene (points, photos, pixels) so a preset can't ask for 3 M splats on a scene
       that needs 400 k.
+- [ ] **Off-angle views break up** (Q11, the user's top priority with Q1): surfaces that look right from the
+      capture direction smear into needles and see-through streaks from other angles. First make it measurable
+      (holdout-sector PSNR and a needle count in the benchmark), then test in this order, one change each:
+      (a) splats flattened onto surfaces (flatness is weighted 0 today) with a tighter long-axis limit;
+      (b) depth and normal consistency between neighbouring views, PGSR style, using the LiDAR depth where it
+      exists; (c) view-dependent colour held back (lower SH degree until late, a penalty on the higher bands) so
+      colour can't stand in for geometry; (d) opacity pushed to solid or gone late in training; (e) pruning by
+      contribution across views. Windows and other reflective surfaces are expected to stay the hardest case.
 - [ ] **Fog in exports** (Q2): run the invisible-splat census (Auto clean) automatically at the end of training
       and after a block merge; the only prune today is opacity above 0.005.
 - [ ] **Presets leave too little refinement** (Q3): `densifyStop` stored as a fraction of the steps (about 0.5) in
@@ -252,6 +260,7 @@ Update this table whenever an issue is touched. "Fixes so far" is there so the n
 | Q7 | Colour correction absorbs scene colour | Drone held-out 14.9 → 9.3 dB; fired on both collapsed van blocks | 4 (off when exposure locked, opt-in, on by default, safeguard) | Open: needs one design |
 | Q8 | Block seams and per-block colour | Hard crop by centre; per-block grid mean; sky from one block | none; never measured | Open (milestone 5) |
 | Q9 | Camera solve fragility (video, fisheye, drone) | About 12 fix commits; drone places 904 of 1,225 photos | many | Partly solved; needs benchmark numbers |
+| Q11 | Off-angle views smear into needles and streaks | Van capture, adaptive, 2026-11-17: clean from the capture direction, broken lettering and streaks from a side angle; earlier sliding-door report | `opacityReg` 0.001 helped one scene, not another; not adopted | **Open — top priority** (milestone 1) |
 | Q10 | Capture blur | Earlier limits were undone by ARKit | 5; confirmed at 1/250 s on a phone 2026-11-16 | Solved for LiDAR mode; Stereo mode has no motion gate |
 | R1 | Memory exhaustion | 5 incidents incl. two kernel panics | 5 local guards | Open: one budget (milestone 4) |
 | R2 | GPU slots, queueing, migration | 7 releases in 3 days; a job queued for ever beside an idle GPU (fixed 1.7.15) | 1.7.3 – 1.7.15 | Works on the RTX 4080 + 610M (migration confirmed 2026-11-17); needs the soak test |
@@ -297,8 +306,8 @@ multi-source datasets, 4D.
 
 ## 8. Decisions for the user
 
-1. **Scope freeze:** agree that Windows, the Vulkan trainer, VHS and stereo get bug fixes only until milestones
-   0–2 are done.
+1. **Scope freeze:** agreed by the user on 2026-11-17 — Windows, the Vulkan trainer, VHS and stereo get bug fixes
+   only until milestones 0–2 are done. The user's top priorities are Q1 (MCMC) and Q11 (off-angle views).
 2. **One strategy:** replace the MCMC / adaptive choice with a single hybrid strategy (milestone 3), keeping the
    old ones only behind the expert switch.
 3. **Commercial use by default** (permissive models), or best models by default with licences shown.
