@@ -299,7 +299,25 @@ the default run. Control `j250032af5bb`: `noiseLR` 0 with the original 60,000-st
 through step 13,500 (cap reached at about 9,700). So the noise is necessary for the collapse.
 
 Fix under test: `noiseMaxSigma` (all three trainers, off by default, Linux 1.7.16) limits the noise step along
-each axis to that many of the splat's own standard deviations. Not measured yet.
+each axis to that many of the splat's own standard deviations.
+
+**Q1 fix measured, 2026-11-18: the limit does not work, and neither does weaker noise.** Same settings, gsplat,
+RTX 4080, 60,000-step schedule, Linux 1.7.16:
+
+| Run | Job | Result |
+|---|---|---|
+| `noiseMaxSigma` 1 | `jc21df0ca64d` | 18.7 dB at 6,500 → 12.8 at 8,500; out of memory at 8,900 |
+| `noiseMaxSigma` 0.1 | `jc990f8d89cd` | 17.4 at 8,500 → 15.2 at 9,200 → 12.0 at 11,000 |
+| `noiseLR` 5e4 | `j31519490805` | 19.1 at 7,500 → 15.3 at 9,000; out of memory at 10,400 |
+| `noiseLR` 0 (control) | `j250032af5bb` | 18.3–20.8 through 13,500 |
+
+So large jumps are not the mechanism: any noise collapses the run once the count passes about 1 M, only later
+when it is weaker. The collapsed runs run out of GPU memory in the rasteriser at a count that fits when healthy,
+so splats cover far more screen than normal (very near cameras, or very large); which one is not known.
+`noiseMaxSigma` did not help and should be removed (rule 2) unless the next step finds a use for it.
+Next: stop testing blind. Log splat statistics during an MCMC run (share with the noise gate open, scale
+percentiles, distance to the nearest camera, tile intersections per splat) and compare a healthy and a
+collapsing run at the same step; this is part of milestone 0's divergence guard.
 
 No default has changed. Next: find why the default noise diverges on this scene and not at a 1 M cap (the noise
 is scaled by each splat's covariance and by low opacity, so large faint splats move furthest), then fix the form
