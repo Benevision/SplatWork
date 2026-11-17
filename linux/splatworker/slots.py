@@ -228,10 +228,16 @@ def apply_speeds(slots: Sequence[Slot], speeds: Dict[str, Dict[str, Any]]) -> No
 _VENDORS = {0x10DE: "nvidia", 0x1002: "amd", 0x8086: "intel"}
 
 
-def estimate_mb(cfg: Dict[str, Any], photos: int, width: int, height: int) -> int:
-    """Rough peak memory (MB) of a Vulkan training job: splats (parameters, two Adam moments, gradients,
-    densification and sorting buffers ~1.1 KB each at maxGaussians), the photos at their training size (8-bit
-    RGBA) and the render buffers."""
+def estimate_mb(cfg: Dict[str, Any], photos: int, width: int, height: int, trainer: str = "vulkan",
+                shared_memory: bool = False) -> int:
+    """Rough peak GPU memory (MB) of a training job: splats (parameters, two Adam moments, gradients,
+    densification and sorting buffers ~1.1 KB each at maxGaussians), the render buffers at the training size, and
+    the photos only where they really are in GPU memory: the Vulkan trainer keeps them in host RAM, gsplat caches
+    them on the GPU only up to viewstore.GPU_BUDGET (else RAM / streamed from disk) — except that an integrated GPU's
+    memory *is* the system RAM (``shared_memory``), so there every photo counts. ``photos``: the job's own (a
+    block's ``cameraIds``)."""
+    from .viewstore import GPU_BUDGET
+
     from .config import TrainingConfig
 
     try:
@@ -241,7 +247,14 @@ def estimate_mb(cfg: Dict[str, Any], photos: int, width: int, height: int) -> in
         splats, max_side = int(cfg.get("maxGaussians") or 3_000_000), int(cfg.get("maxImageSize") or 1600)
     scale = min(1.0, max_side / max(width, height, 1)) if width and height else 1.0
     px = int(width * scale) * int(height * scale) if width and height else 1600 * 1200
-    return int((splats * 1100 + photos * px * 4 + px * 64) / 2**20) + 512
+    photo_bytes = photos * px * 4
+    if shared_memory:
+        on_gpu = photo_bytes
+    elif trainer == "gsplat":
+        on_gpu = min(photo_bytes, GPU_BUDGET)
+    else:
+        on_gpu = 0
+    return int((splats * 1100 + on_gpu + px * 64) / 2**20) + 512
 
 
 def budget_mb(slot: "Slot", system_mb: Optional[int] = None) -> Optional[int]:

@@ -226,3 +226,71 @@ def test_a_move_interrupted_by_a_restart(tmp_path):
     m.load()
     job = m.jobs["jabc"]
     assert "pin" not in job.spec and "movedFrom" not in job.spec and job.state == "queued"
+
+
+# ------------------------------------------------- memory: never queued for ever (BensPC, 1.7.15)
+
+def _big_dataset(m):
+    ds = m.settings.datasets_dir / "d1" / "files"
+    ds.mkdir(parents=True, exist_ok=True)
+    cams = [{"id": i, "image": f"images/{i:04d}.jpg", "width": 4032, "height": 3024} for i in range(431)]
+    (ds / "dataset.json").write_text(json.dumps({"cameras": cams}))
+    m._dataset_sizes.clear()
+
+
+def test_the_benspc_job_starts_on_the_4080(worker):
+    """5 M splats, Max image size 3600, 431 photos of 4032×3024: 1.7.14 estimated 20-22 GB (every photo counted as
+    GPU memory) against the 4080's 16 GB and queued it for ever; the photos live in host RAM (Vulkan) or a capped
+    GPU cache (gsplat), and a fast GPU never refuses a job on an estimate."""
+    from splatworker import slots as S
+
+    m, b = worker()
+    _big_dataset(m)
+    cfg = {"name": "block 1/2", "iterations": 20, "maxGaussians": 5_000_000, "maxImageSize": 3600,
+           "cameraIds": list(range(230))}
+    job = m.submit("train", "d1", "Capture 2 block 1/2", "config", cfg, total_steps=20)
+    wait_for(lambda: job.state == "completed")
+    assert [r[:2] for r in b.runs] == [("block 1/2", 0)]
+    fast, slow = m.slots
+    est, budget = m._memory(fast, job)
+    assert 5_000 < est < 0.8 * budget                         # ~6.6 GB: splats + render buffers, no photos
+    assert S.estimate_mb(cfg, 230, 4032, 3024, trainer="gsplat") - est == 3 * 1024    # gsplat's capped cache
+    est_shared, _ = m._memory(slow, job)
+    assert est_shared > est + 8_000                            # on the 610M every photo is in system RAM (+8.5 GB)
+
+
+def test_over_the_estimate_a_fast_gpu_tries_anyway(worker):
+    m, b = worker()
+    _big_dataset(m)
+    job = m.submit("train", "d1", "huge", "config", {"name": "huge", "iterations": 10, "maxGaussians": 20_000_000},
+                   total_steps=10)
+    wait_for(lambda: job.state == "completed")
+    log = (job.dir / "log.txt").read_text(encoding="utf-8") if (job.dir / "log.txt").exists() else "".join(
+        p.read_text(encoding="utf-8") for p in job.dir.glob("*.log"))
+    assert "more than RTX 4080's 16 GB: trying anyway" in log
+
+
+def test_slower_gpu_still_checks_memory(worker):
+    m, b = worker()
+    _big_dataset(m)
+    fast, slow = m.slots
+    from splatworker.server import Job
+
+    big = Job(m.settings.jobs_dir, {"kind": "train", "datasetId": "d1", "config": {"maxGaussians": 200_000_000}},
+              {"jobId": "jx", "state": "queued"})
+    with m.cond:
+        m.running[fast.key] = "other"
+        assert not m.slot_takes(slow, big) and m.slot_takes(fast, big)
+        m.running.pop(fast.key)
+
+
+def test_a_job_no_gpu_here_can_run_says_why(tmp_path):
+    from splatworker.config import ServerSettings
+    from splatworker.server import Job, JobManager
+
+    m = JobManager(ServerSettings(data_dir=tmp_path / "w", mdns=False), FakeVulkan(), [Slot(**SLOW)])
+    job = Job(tmp_path, {"kind": "train", "datasetId": "d1", "trainer": "gsplat", "config": {}},
+              {"jobId": "jg", "state": "queued"})
+    assert m._never_runs(job) == "waiting: no GPU here can run a train job with gsplat (it needs an NVIDIA GPU)"
+    ok = Job(tmp_path, {"kind": "train", "datasetId": "d1", "config": {}}, {"jobId": "jv", "state": "queued"})
+    assert m._never_runs(ok) is None

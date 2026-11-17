@@ -81,6 +81,14 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.15" date="2026-11-17">
+      <description>
+        <p>Large training jobs no longer stay queued on an idle GPU.</p>
+        <ul>
+          <li>The GPU memory estimate counted every photo; a big job could wait for ever next to a free GPU. The fast GPU now always starts it, and running out of memory says what to lower.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.14" date="2026-11-17">
       <description>
         <p>An experimental GPU matching benchmark for graphics cards PyTorch can't use.</p>

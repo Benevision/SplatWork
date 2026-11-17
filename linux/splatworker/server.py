@@ -612,7 +612,7 @@ class JobManager:
             return named == slot.id
         if not slot.takes_kind(kind):
             return False
-        if kind == "train" and not self._fits(slot, job):
+        if kind == "train" and slot.slower and not self._fits(slot, job):
             return False
         if kind == "train" and job.spec.get("trainer") == "gsplat" and slot.cuda is None and slot.key is not None:
             return False                     # a GPU only the Vulkan trainer can use
@@ -641,17 +641,52 @@ class JobManager:
             self._dataset_sizes[dataset_id] = size
         return self._dataset_sizes[dataset_id]
 
-    def _fits(self, slot, job: Job) -> bool:
-        """Whether a train job's estimated memory fits the slot (slots.estimate_mb / budget_mb); unknown: yes."""
+    def _never_runs(self, job: Job) -> Optional[str]:
+        """(Holding ``cond``.) Why no slot here could ever start this queued job, or None (it only waits for a busy
+        GPU). Memory never blocks a fast slot, so this is about kinds, trainers and named slots."""
+        kind = job.spec.get("kind")
+        if kind == "pipeline" or (self.lease_mode and kind == "process"):
+            return None
+        want = job.spec.get("pin") or job.spec.get("slot")
+        cands = [s for s in self.slots if (not want or s.id == want) and s.takes_kind(kind)]
+        if kind == "train" and job.spec.get("trainer") == "gsplat":
+            cands = [s for s in cands if s.cuda is not None or s.key is None]
+        if cands:
+            return None
+        if want and not any(s.id == want for s in self.slots):
+            return f"waiting: GPU {want} isn't one of this worker's GPUs"
+        return f"waiting: no GPU here can run a {kind} job" + (" with gsplat (it needs an NVIDIA GPU)"
+                                                               if job.spec.get("trainer") == "gsplat" else "")
+
+    def _job_trainer(self, job: Job) -> Optional[str]:
+        if job.spec.get("trainer"):
+            return job.spec["trainer"]
+        try:
+            return self.backend.trainer_choice().get("trainer")
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _memory(self, slot, job: Job):
+        """(estimated MB, budget MB) of a train job on ``slot`` (slots.estimate_mb / budget_mb); budget None =
+        unknown."""
         from .slots import budget_mb, estimate_mb
 
-        if slot.memory_mb is None and not slot.integrated:
-            return True
-        budget = budget_mb(slot)
-        if not budget:
-            return True
+        cfg = job.spec.get("config") or {}
         photos, w, h = self._dataset_size(job.spec.get("datasetId", ""))
-        return estimate_mb(job.spec.get("config") or {}, photos, w, h) <= 0.8 * budget
+        ids = cfg.get("cameraIds")
+        if isinstance(ids, list) and ids:
+            photos = len(ids)                     # a block trains only its own photos
+        est = estimate_mb(cfg, photos, w, h, trainer=self._job_trainer(job) or "vulkan",
+                          shared_memory=bool(slot.integrated))
+        budget = budget_mb(slot) if (slot.memory_mb is not None or slot.integrated) else None
+        return est, budget
+
+    def _fits(self, slot, job: Job) -> bool:
+        """Whether a train job's estimated memory fits ``slot`` — asked of slower slots only (whether they start a
+        waiting job): a fast slot always takes its jobs and, when the estimate is over, says so and tries
+        (estimates are rough; the trainers stream photos when memory is short). Unknown: yes."""
+        est, budget = self._memory(slot, job)
+        return not budget or est <= 0.8 * budget
 
     # ------------------------------------------------------- moving jobs to a faster GPU (1.7.8)
     HANDOVER_S = 60.0       # pausing, loading the photos again, resuming
@@ -677,7 +712,7 @@ class JobManager:
             job = self.jobs[jid]
             if (job.spec.get("kind") != "train" or job.state != "training" or job.pause_event.is_set()
                     or job.cancel_event.is_set() or getattr(job, "migrate_to", None) is not None
-                    or job.spec.get("slot") or not self._fits(fast, job)):
+                    or job.spec.get("slot")):
                 continue
             step, total = int(job.status.get("step") or 0), int(job.status.get("totalSteps") or 0)
             eta = job.status.get("etaSeconds")
@@ -889,6 +924,12 @@ class JobManager:
         if now - getattr(self, "_housekept", 0.0) < 30.0:
             return
         self._housekept = now
+        for job in list(self.jobs.values()):     # a queued job no GPU here can ever run says why
+            if job.state == "queued":
+                why = self._never_runs(job)
+                if why and job.status.get("message") != why:
+                    job.update(persist=True, message=why)
+                    job.log(why)
         for job in list(self.jobs.values()):
             if job.state != "paused" or job.spec.get("kind") == "pipeline":
                 continue
@@ -958,6 +999,15 @@ class JobManager:
         job.migrate_to = None
         job.log(f"starting on {where}{' (' + gpu_name + ')' if gpu_name else ''}"
                 f"{' — a slower GPU, used while the faster ones are busy' if slot.slow else ''}")
+        if job.spec.get("kind") == "train":
+            try:
+                est, budget = self._memory(slot, job)
+                if budget and est > 0.8 * budget:
+                    job.log(f"estimated about {est / 1024:.1f} GB of GPU memory, more than "
+                            f"{gpu_name or 'this GPU'}'s {budget / 1024:.0f} GB: trying anyway (the estimate is rough; "
+                            "out of memory would fail the job with what to lower)")
+            except Exception:  # noqa: BLE001
+                pass
 
         dataset_dir = dataset_root(self.settings, job.spec["datasetId"])
         if dataset_dir is None:
@@ -1048,6 +1098,12 @@ class JobManager:
             return
         except Exception as e:
             msg = str(e) or e.__class__.__name__
+            low = msg.lower()
+            if kind == "train" and ("out of memory" in low or "out_of_device_memory" in low or "oom" in low.split()):
+                est, budget = self._memory(slot, job)
+                msg = (f"{gpu_name or 'the GPU'} ran out of memory (estimated about {est / 1024:.0f} GB"
+                       + (f", it has {budget / 1024:.0f} GB" if budget else "")
+                       + "): lower Max image size or the splat count. " + msg)
             job.log(f"FAILED: {msg}")
             self._finish(job, "failed", msg)
             return

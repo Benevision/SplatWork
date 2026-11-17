@@ -6,6 +6,15 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.15 — big training jobs no longer wait for ever:** since 1.7.8 a GPU only took a training
+  job whose memory estimate fitted, and the estimate counted every photo as GPU memory. A 2-block run (5 M splats,
+  Max image size 3600, 431 photos of 4032×3024) was estimated at over 20 GB, so it sat "queued" next to an idle
+  RTX 4080 with 16 GB. Now a fast GPU always takes its jobs. If the estimate is over, the log says "trying anyway",
+  and an out-of-memory failure says to lower Max image size or the splat count. The estimate counts only what is
+  really in GPU memory: the Vulkan trainer keeps photos in RAM, gsplat caches at most 3 GB of them, and a block
+  counts only its own photos. That job is now about 6.5 GB. Only an integrated GPU (shared RAM) counts every photo,
+  and the memory check now only decides whether a slower GPU starts a waiting job. A queued job that no GPU here can
+  ever run says why.
 - **SplatWork for Linux 1.7.14 — SIFT matching on any GPU (experimental benchmark):** `splatwork-vk-match`, built
   into the Flatpak next to the Vulkan trainer, matches SIFT descriptors on any Vulkan GPU (brute-force nearest
   neighbours, ratio test, mutual check). The distances are exact integers, so it gives exactly the same matches as

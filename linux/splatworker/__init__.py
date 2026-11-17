@@ -8,7 +8,7 @@ without CUDA.
 
 import sys as _sys
 
-__version__ = "1.7.14"
+__version__ = "1.7.15"
 # The product name shown to people (logs, generated files, messages); the protocol and identifiers don't change.
 PRODUCT_NAME = "SplatWork for Windows" if _sys.platform == "win32" else "SplatWork for Linux"
 PROTOCOL_VERSION = 1
