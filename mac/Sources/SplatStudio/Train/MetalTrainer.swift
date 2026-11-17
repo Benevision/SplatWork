@@ -1711,7 +1711,15 @@ final class MetalTrainer: @unchecked Sendable {
     private func resetOpacity() {
         let op = ptr(params[3])
         let cap = GaussianCloud.invSigmoid(0.01)
+    /// Step of the last opacity reset. For a while after one the splats are nearly transparent by design, so the
+    /// held-out score and the colour-correction safeguard (which reads a dark render as "the correction has taken
+    /// over") are not meaningful: both wait `opacityRecovery` steps.
+    private var lastOpacityReset = -1_000_000
+    static let opacityRecovery = 500
+    private var recoveringFromReset: Bool { step - lastOpacityReset < Self.opacityRecovery }
+
         for i in 0..<n { op[i] = min(op[i], cap) }
+        lastOpacityReset = step
         let (ra, rb) = momentRowBytes(3)
         memset(m1[3].contents(), 0, n * ra); memset(m2[3].contents(), 0, n * rb)
     }
@@ -1734,7 +1742,7 @@ final class MetalTrainer: @unchecked Sendable {
             if step % 25 == 0 || step == config.iterations { peakAllocatedBytes = max(peakAllocatedBytes, ctx.device.currentAllocatedSize) }
             emaLoss = step <= 1 ? l : emaLoss * 0.95 + l * 0.05
             emaPSNR = step <= 1 ? p : emaPSNR * 0.95 + p * 0.05
-            if config.evalInterval > 0 && step % config.evalInterval == 0 {
+            if config.evalInterval > 0 && step % config.evalInterval == 0 && !recoveringFromReset {
                 status.evalPSNR = try evaluate()
                 try guardColourCorrection()
                 status.colourNote = colourNote
