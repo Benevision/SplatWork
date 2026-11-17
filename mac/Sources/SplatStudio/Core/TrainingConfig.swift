@@ -108,10 +108,6 @@ struct TrainingConfig: Codable, Equatable {
     /// Pushes splats towards flat discs (penalises the smallest axis's share of the splat's size), which gives each
     /// splat a clear surface normal. 0 = off.
     var flatnessReg: Float = 0
-    /// Depth spread (Metal trainer only, captures with sensor depth): every splat a pixel's ray meets is pulled to the
-    /// measured depth (sum of weight x |splat depth - sensor depth|), so surfaces are one layer at the surface instead
-    /// of a see-through stack that only blends to the right depth. 0 = off (experimental, issue Q11).
-    var depthSpreadWeight: Float = 0
     /// Solid-or-gone opacity (Metal trainer only): penalty on half-transparent splats (o·(1 − o)) for the last part
     /// of training, from `opacityBinaryFrom` (share of the steps); splats that end up invisible are dropped from the
     /// result. Off by default: at 0.05 on the van capture it gave the same held-out scores with 38 % fewer splats
@@ -148,7 +144,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.skybox, &skybox); d(.skyboxResolution, &skyboxResolution); d(.skyAlphaWeight, &skyAlphaWeight)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg); d(.bilateralGrid, &bilateralGrid)
         d(.optimizerPrecision, &optimizerPrecision)
-        d(.normalWeight, &normalWeight); d(.normalStart, &normalStart); d(.flatnessReg, &flatnessReg); d(.depthSpreadWeight, &depthSpreadWeight); d(.opacityBinaryReg, &opacityBinaryReg); d(.opacityBinaryFrom, &opacityBinaryFrom); d(.depthPriors, &depthPriors)
+        d(.normalWeight, &normalWeight); d(.normalStart, &normalStart); d(.flatnessReg, &flatnessReg); d(.opacityBinaryReg, &opacityBinaryReg); d(.opacityBinaryFrom, &opacityBinaryFrom); d(.depthPriors, &depthPriors)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
     }

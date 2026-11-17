@@ -160,9 +160,36 @@ Ordinary held-out photos score about 1 dB higher on the van (SSIM 0.66 → 0.72)
 the grid off; the sector is unchanged. The default was left alone: it is Q7's decision, and held-out photos are
 scored without any correction, which favours "off".
 
+## Views from below the capture (2026-11-18)
+
+A van splat trained with the repaired trainer (build 306) still smears when viewed from near the ground. The sector
+score did not show this: it removes a slice of angles but keeps the same height band. `novel_views.py sector --by low`
+(or `high`) holds out the lowest (highest) `--fraction` of the cameras instead. Van, re-prepared dataset (dense
+points, refined poses), lowest 65 of 431 cameras held out (`--fraction 0.15`), Balanced, adaptive, Metal:
+
+| run | low views PSNR | SSIM | normal PSNR | SSIM | splats | needles | mean opacity |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| current trainer | 16.76 | 0.5748 | 22.07 | 0.6601 | 800,000 | 39.5% | 0.469 |
+| (a) needle limit 4 | 16.84 | 0.5873 | 22.07 | 0.6577 | 734,571 | 0.0% | 0.494 |
+| (c) SH degree 1 | 16.58 | 0.5822 | 21.78 | 0.6549 | 781,693 | 40.4% | 0.463 |
+| (b) depth weight 0.5 | 16.91 | 0.5877 | 21.97 | 0.6554 | 800,000 | 36.0% | 0.389 |
+| (d) solid-or-gone 0.05 | 16.85 | 0.5853 | 22.21 | 0.6633 | 498,866 | 41.4% | 0.834 |
+| depth spread 0.05 | 16.71 | 0.5861 | 22.10 | 0.6610 | 800,000 | 40.3% | 0.478 |
+| depth spread 0.5 | 14.76 | 0.5384 | 21.42 | 0.6454 | 501,805 | 37.8% | 0.506 |
+| depth spread 2 | 9.39 | 0.2782 | 16.94 | 0.5862 | 413,238 | 21.4% | 0.452 |
+
+Low views are 5.3 dB below ordinary held-out photos, and no option closes the gap (noise is about 0.3 dB). Removing
+every needle changes the score by 0.08 dB, so needles are not what this score punishes.
+
+Depth spread was a new term: sum of weight x |splat depth - sensor depth| along each pixel's ray, so that surfaces
+are one layer at the LiDAR depth and not a see-through stack that only blends to it. No effect at 0.05, harmful
+from 0.5. The code is removed (it reached `main` for one commit, 5b13da1, off by default, when another session's
+commit picked up the working tree).
+
 ## Where Q11 stands
 
 Better, not fixed. Sector views on the van are still 4.4 dB below ordinary held-out views and still show streaks
-and smeared lettering. Not yet tried: multi-view depth / normal consistency between neighbouring views (b), a run
+and smeared lettering. Not yet tried: multi-view depth / normal consistency between neighbouring views (b: with LiDAR depth already
+tying every view to one surface it is not expected to help these two scenes), a run
 with the 43 nearest cameras restored to see how much of the sector gap is missing coverage, the High preset, and
 the gsplat and Vulkan trainers on the same sector split.

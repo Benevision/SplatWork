@@ -111,6 +111,9 @@ Each item is a known defect with evidence; fix, measure, tick.
       *2026-11-17: measurable now (`novel_views.py sector`); the main cause on the Mac was a pruning rule, fixed
       (+2.8 dB on the van sector). (a), (c), (d), (e) and a higher LiDAR depth weight measured: no gain beyond noise.
       Still to do: (b) proper, between neighbouring views. Tables in [Q11_OFF_ANGLE.md](Q11_OFF_ANGLE.md).*
+      *2026-11-18: views from below the capture still smear with the repaired trainer. New score
+      `novel_views.py sector --by low`: van low views 16.76 dB against 22.07 ordinary held-out; needle limit,
+      SH degree 1, depth weight 0.5, solid-or-gone and a depth-spread term (removed) all within noise or worse.*
 - [ ] **Fog in exports** (Q2): run the invisible-splat census (Auto clean) automatically at the end of training
       and after a block merge; the only prune today is opacity above 0.005.
 - [ ] **Presets leave too little refinement** (Q3): `densifyStop` stored as a fraction of the steps (about 0.5) in

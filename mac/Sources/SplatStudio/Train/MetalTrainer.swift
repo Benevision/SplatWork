@@ -9,7 +9,7 @@ struct RasterParams {
     var bg = SIMD4<Float>()
     var absGrad: UInt32 = 0, hasDepth: UInt32 = 0, numGaussians: UInt32 = 0, step: UInt32 = 0
     var ssimWeight: Float = 0.2, depthWeight: Float = 0, invNumPixels: Float = 0, pad: Float = 0
-    var sky: UInt32 = 0, normalWeight: Float = 0, depthSpread: Float = 0, pad3: UInt32 = 0
+    var sky: UInt32 = 0, normalWeight: Float = 0, pad2: UInt32 = 0, pad3: UInt32 = 0
 }
 
 struct AdamParams {
@@ -625,7 +625,6 @@ final class MetalTrainer: @unchecked Sendable {
         rp.depthWeight = config.depthWeight
         rp.invNumPixels = 1 / Float(v.width * v.height)
         rp.pad = config.depthEdgeAware ? 1 : 0   // edge-aware depth flag (loss_grad)
-        rp.depthSpread = rp.hasDepth != 0 ? config.depthSpreadWeight : 0
         return rp
     }
 
@@ -1016,9 +1015,6 @@ final class MetalTrainer: @unchecked Sendable {
         enc.setBuffer(finalT, offset: 0, index: 6); enc.setBuffer(nContrib, offset: 0, index: 7)
         enc.setBuffer(gradImg, offset: 0, index: 8); enc.setBuffer(acc, offset: 0, index: 9)
         enc.setBuffer(skyDT, offset: 0, index: 10)
-        enc.setBuffer(v.depth ?? emptyDepth, offset: 0, index: 11)
-        var bds = v.depthSize
-        enc.setBytes(&bds, length: 8, index: 12); enc.setBuffer(v.target, offset: 0, index: 13)
         enc.dispatchThreadgroups(MTLSize(width: Int(rp.tilesX), height: Int(rp.tilesY), depth: 1), threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         enc.memoryBarrier(scope: .buffers)
         split("4 backward raster")
