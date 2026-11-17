@@ -530,7 +530,7 @@ void GpuSplat::backwardStep(const std::array<AdamGroup, 5>& groups, const StepEx
         dispatch1D("adam", {feat.skyTex, feat.skyGrad, feat.skyM, feat.skyV}, &pc, sizeof(pc), ceilDiv(pc.n, 256));
     }
     if (ex.noiseScaler != 0) {
-        struct { float scaler; uint32_t seed, step, n; } pc{ex.noiseScaler, ex.noiseSeed, ex.noiseStep, un};
+        struct { float scaler; uint32_t seed, step, n; float maxSigma; } pc{ex.noiseScaler, ex.noiseSeed, ex.noiseStep, un, ex.noiseMaxSigma};
         dispatch1D("mcmc_noise", {&params[0], &params[1], &params[2], &params[3]}, &pc, sizeof(pc), ceilDiv(un, 256));
     }
     ctx_.submitWait();

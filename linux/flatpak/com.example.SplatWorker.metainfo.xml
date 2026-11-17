@@ -81,6 +81,15 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.16" date="2026-11-18">
+      <description>
+        <p>Dense points, and an experimental limit on MCMC noise.</p>
+        <ul>
+          <li>Optional dense point cloud after the camera solve.</li>
+          <li>New training setting noiseMaxSigma (off by default) for testing a fix to MCMC runs that fall apart at high splat counts.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.15" date="2026-11-17">
       <description>
         <p>Large training jobs no longer stay queued on an idle GPU.</p>

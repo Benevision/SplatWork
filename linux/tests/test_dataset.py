@@ -253,3 +253,19 @@ def test_background_shell(dataset_dir):
     r = np.linalg.norm(pts - centre, axis=1)
     assert pts.shape == (500, 3) and np.allclose(r, 3 * ds.scene_extent, rtol=1e-4)
     assert pts[:, 1].min() < -0.9 * r[0] + centre[1] and pts[:, 1].max() > 0.9 * r[0] + centre[1]   # whole sphere
+
+
+def test_capped_noise_limits_the_step_to_the_splats_own_size():
+    torch = pytest.importorskip("torch")
+    from splatworker.trainer import inject_capped_noise
+    torch.manual_seed(0)
+    n = 2000
+    params = {"means": torch.zeros(n, 3), "scales": torch.log(torch.full((n, 3), 0.5)),
+              "quats": torch.randn(n, 4), "opacities": torch.full((n,), -12.0)}     # faint: the gate is open
+    inject_capped_noise(torch, params, scaler=400.0, max_sigma=1.0)                  # unlimited step would be 100 × ε
+    step = params["means"].norm(dim=1)
+    assert 0.5 < float(step.mean()) < 1.2 and float(step.max()) < 0.5 * 6            # about one standard deviation (0.5) × |ε|
+    params["means"].zero_()
+    params["scales"].fill_(float(np.log(1e-4)))                                      # tiny splats: below the limit, gsplat's form
+    inject_capped_noise(torch, params, scaler=400.0, max_sigma=1.0)
+    assert float(params["means"].norm(dim=1).mean()) < 1e-4 * 1e-4 * 400.0 * 3

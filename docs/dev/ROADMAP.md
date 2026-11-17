@@ -288,6 +288,13 @@ PSNR from the job log):** position noise is the cause.
 | 5e4 | `jbd57a121036` | 19.8 | 19.9 at 10,500 | 20.4 |
 | 0 | `jd8bc12e5ce8` | 20.2 at 5,700 | 20.9 at 9,700 | 21.5 |
 
+The 5e4 and 0 runs used a 12,000-step schedule (faster learning-rate decay), so they are not like for like with
+the default run. Control `j250032af5bb`: `noiseLR` 0 with the original 60,000-step schedule stayed at 18.3–20.8 dB
+through step 13,500 (cap reached at about 9,700). So the noise is necessary for the collapse.
+
+Fix under test: `noiseMaxSigma` (all three trainers, off by default, Linux 1.7.16) limits the noise step along
+each axis to that many of the splat's own standard deviations. Not measured yet.
+
 No default has changed. Next: find why the default noise diverges on this scene and not at a 1 M cap (the noise
 is scaled by each splat's covariance and by low opacity, so large faint splats move furthest), then fix the form
 of the noise (for example a cap on the step relative to the splat's size or the scene extent) in all three

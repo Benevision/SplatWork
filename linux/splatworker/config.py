@@ -58,6 +58,9 @@ class TrainingConfig:
     opacityReg: float = 0.01
     scaleReg: float = 0.01
     noiseLR: float = 500000.0
+    # Limit on the MCMC position noise: a splat moves at most this many of its own standard deviations per step
+    # along each of its axes (0 = no limit, gsplat's form, which grows with scale squared). Roadmap Q1.
+    noiseMaxSigma: float = 0.0
     antialiased: bool = True
     depthWeight: float = 0.0
     background: str = "random"
@@ -191,7 +194,7 @@ class TrainingConfig:
         for name in ("lrPosition", "lrPositionFinal", "lrColor", "lrSHRest", "lrOpacity",
                      "lrScale", "lrRotation", "bilateralGridLR"):
             need(getattr(self, name) > 0, f"{name} must be > 0")
-        for name in ("opacityReg", "scaleReg", "noiseLR", "depthWeight", "densifyGradThreshold", "bilateralGridTV", "backgroundShell"):
+        for name in ("opacityReg", "scaleReg", "noiseLR", "noiseMaxSigma", "depthWeight", "densifyGradThreshold", "bilateralGridTV", "backgroundShell"):
             need(getattr(self, name) >= 0, f"{name} must be >= 0")
 
     # ------------------------------------------------------- resolved defaults

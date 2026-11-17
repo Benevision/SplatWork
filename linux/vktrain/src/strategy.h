@@ -57,7 +57,8 @@ struct McmcResult { size_t relocated = 0, added = 0; };
 // gsplat MCMCStrategy refinement (relocate, then add) on the host copy.
 McmcResult mcmcRefine(SplatState& s, const McmcParams& prm, HostRng& rng);
 // gsplat inject_noise_to_position, host version of shaders/mcmc_noise.comp.
-void mcmcNoise(SplatState& s, float scaler, uint32_t seed, uint32_t step);
+// maxSigma > 0 limits the step along each axis to maxSigma × the splat's standard deviation on that axis.
+void mcmcNoise(SplatState& s, float scaler, uint32_t seed, uint32_t step, float maxSigma = 0.0f);
 // trainer.py spread_clone_groups: returns the number of splats moved.
 size_t spreadCloneGroups(SplatState& s);
 

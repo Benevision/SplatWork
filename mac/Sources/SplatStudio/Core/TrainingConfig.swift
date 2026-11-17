@@ -31,6 +31,9 @@ struct TrainingConfig: Codable, Equatable {
     var opacityReg: Float = 0.01
     var scaleReg: Float = 0.01
     var noiseLR: Float = 500_000
+    /// Limit on the MCMC position noise: a splat moves at most this many of its own standard deviations per step
+    /// along each of its axes (0 = no limit). Roadmap Q1.
+    var noiseMaxSigma: Float = 0
     var antialiased = true
     var depthWeight: Float = 0.1
     var background: Background = .random
@@ -105,6 +108,10 @@ struct TrainingConfig: Codable, Equatable {
     /// Pushes splats towards flat discs (penalises the smallest axis's share of the splat's size), which gives each
     /// splat a clear surface normal. 0 = off.
     var flatnessReg: Float = 0
+    /// Depth spread (Metal trainer only, captures with sensor depth): every splat a pixel's ray meets is pulled to the
+    /// measured depth (sum of weight x |splat depth - sensor depth|), so surfaces are one layer at the surface instead
+    /// of a see-through stack that only blends to the right depth. 0 = off (experimental, issue Q11).
+    var depthSpreadWeight: Float = 0
     /// Solid-or-gone opacity (Metal trainer only): penalty on half-transparent splats (o·(1 − o)) for the last part
     /// of training, from `opacityBinaryFrom` (share of the steps); splats that end up invisible are dropped from the
     /// result. Off by default: at 0.05 on the van capture it gave the same held-out scores with 38 % fewer splats
@@ -131,7 +138,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.pruneOpacity, &pruneOpacity); d(.lrPosition, &lrPosition); d(.lrPositionFinal, &lrPositionFinal)
         d(.lrColor, &lrColor); d(.lrSHRest, &lrSHRest); d(.lrOpacity, &lrOpacity); d(.lrScale, &lrScale)
         d(.lrRotation, &lrRotation); d(.ssimWeight, &ssimWeight); d(.opacityReg, &opacityReg); d(.scaleReg, &scaleReg)
-        d(.noiseLR, &noiseLR); d(.antialiased, &antialiased); d(.depthWeight, &depthWeight); d(.background, &background)
+        d(.noiseLR, &noiseLR); d(.noiseMaxSigma, &noiseMaxSigma); d(.antialiased, &antialiased); d(.depthWeight, &depthWeight); d(.background, &background)
         d(.initialOpacity, &initialOpacity); d(.randomInitCount, &randomInitCount); d(.seed, &seed)
         d(.previewInterval, &previewInterval); d(.evalInterval, &evalInterval)
         d(.transientMasking, &transientMasking); d(.transientSensitivity, &transientSensitivity); d(.transientStart, &transientStart)
@@ -141,7 +148,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.skybox, &skybox); d(.skyboxResolution, &skyboxResolution); d(.skyAlphaWeight, &skyAlphaWeight)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg); d(.bilateralGrid, &bilateralGrid)
         d(.optimizerPrecision, &optimizerPrecision)
-        d(.normalWeight, &normalWeight); d(.normalStart, &normalStart); d(.flatnessReg, &flatnessReg); d(.opacityBinaryReg, &opacityBinaryReg); d(.opacityBinaryFrom, &opacityBinaryFrom); d(.depthPriors, &depthPriors)
+        d(.normalWeight, &normalWeight); d(.normalStart, &normalStart); d(.flatnessReg, &flatnessReg); d(.depthSpreadWeight, &depthSpreadWeight); d(.opacityBinaryReg, &opacityBinaryReg); d(.opacityBinaryFrom, &opacityBinaryFrom); d(.depthPriors, &depthPriors)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
     }

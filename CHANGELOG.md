@@ -6,6 +6,12 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.16 — an experimental limit on MCMC noise (off by default).** MCMC training with a high
+  splat limit fell apart on one capture (a van, 3.1 M splats per block: 19.5 dB falling to 11.7 dB). The cause is
+  the position noise: with it off the same run stays at 18–21 dB. The noise step grows with the square of a
+  splat's size, so large faint splats are thrown far. The new setting `noiseMaxSigma` (all three trainers, 0 = off)
+  limits the step to that many of the splat's own standard deviations. It stays off until it is measured; see
+  roadmap issue Q1. This version also carries the dense points option.
 - **Sharper splats from the Adaptive strategy on the Mac, most of all on close-range captures.** While it was
   adding splats, training also deleted every splat that had looked wider than a tenth of a photo, which on a
   close-up capture is every surface a camera stood near; it also reset opacity on the last step of that phase,

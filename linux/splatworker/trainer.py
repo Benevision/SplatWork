@@ -364,6 +364,25 @@ def _in_box(xyz, lo, hi):
 
 
 
+def inject_capped_noise(torch, params, scaler: float, max_sigma: float) -> None:
+    """gsplat's MCMC position noise (pos += Σ · ε · gate · scaler) with a limit: along each of its own axes a splat
+    moves at most ``max_sigma`` × its standard deviation on that axis per unit of ε. Without the limit the step
+    grows with scale squared, so large faint splats are thrown far across the scene (roadmap Q1)."""
+    with torch.no_grad():
+        op = torch.sigmoid(params["opacities"].data.float().flatten())
+        gate = torch.sigmoid(100.0 * ((1.0 - op) - 0.995))
+        s = torch.exp(params["scales"].data.float())
+        q = torch.nn.functional.normalize(params["quats"].data.float(), dim=1)   # w, x, y, z
+        w, x, y, z = q.unbind(1)
+        R = torch.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
+                         2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
+                         2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], dim=1).reshape(-1, 3, 3)
+        e = torch.randn_like(s)
+        u = torch.einsum("nji,nj->ni", R, e)                                  # Rᵀ ε
+        k = torch.minimum(s * s * (gate * scaler)[:, None], max_sigma * s)
+        params["means"].data.add_(torch.einsum("nij,nj->ni", R, k * u).to(params["means"].dtype))
+
+
 def spread_clone_groups(torch, params) -> int:
     """Long-axis splitting (ImprovedGS / IGS+) on top of gsplat's MCMC strategy, without touching its code.
 
@@ -1043,7 +1062,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
 
     densify_stop = cfg.effective_densify_stop()
     if cfg.strategy == "mcmc":
-        strategy = MCMCStrategy(cap_max=cfg.maxGaussians, noise_lr=cfg.noiseLR,
+        strategy = MCMCStrategy(cap_max=cfg.maxGaussians,
+                                noise_lr=0.0 if cfg.noiseMaxSigma > 0 else cfg.noiseLR,
                                 refine_start_iter=cfg.densifyStart, refine_stop_iter=densify_stop,
                                 refine_every=cfg.densifyInterval, min_opacity=cfg.pruneOpacity,
                                 verbose=False)
@@ -1423,6 +1443,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         else:
             strategy.step_post_backward(params, optimizers, strategy_state, step, info,
                                         lr=pos_sched.get_last_lr()[0])
+            if cfg.noiseMaxSigma > 0 and cfg.noiseLR > 0:
+                inject_capped_noise(torch, params, pos_sched.get_last_lr()[0] * cfg.noiseLR, cfg.noiseMaxSigma)
             if (cfg.longAxisSplit and cfg.densifyStart < step < densify_stop
                     and step % cfg.densifyInterval == 0):
                 spread_clone_groups(torch, params)

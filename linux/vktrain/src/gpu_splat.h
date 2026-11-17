@@ -75,6 +75,7 @@ public:
         Buffer* count = nullptr;
         bool absGrad = false;
         float noiseScaler = 0;     // mcmc_noise.comp (0: off)
+        float noiseMaxSigma = 0;   // limit in the splat's own standard deviations (0: none)
         uint32_t noiseSeed = 0, noiseStep = 0;
         float skyLr = 0;           // > 0 with feat.sky: Adam step of the panorama (its own count, skySteps ≥ 1)
         int skySteps = 0;

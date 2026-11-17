@@ -273,17 +273,21 @@ McmcResult mcmcRefine(SplatState& s, const McmcParams& prm, HostRng& rng) {
     return res;
 }
 
-void mcmcNoise(SplatState& s, float scaler, uint32_t seed, uint32_t step) {
+void mcmcNoise(SplatState& s, float scaler, uint32_t seed, uint32_t step, float maxSigma) {
     for (int i = 0; i < s.n(); i++) {
         float o = 1.0f / (1.0f + std::exp(-s.p.opLogit[size_t(i)]));
         float gate = 1.0f / (1.0f + std::exp(-100.0f * ((1.0f - o) - 0.995f)));
         if (gate * scaler == 0.0f) continue;
         double e[3];
-        for (uint32_t k = 0; k < 3; k++) e[k] = double(hashNormal(seed, step, uint32_t(i), k)) * gate * scaler;
+        for (uint32_t k = 0; k < 3; k++) e[k] = double(hashNormal(seed, step, uint32_t(i), k));
         double R[3][3];
         quatRot(&s.p.quat[size_t(i) * 4], R);
         double s2[3];
-        for (int k = 0; k < 3; k++) s2[k] = std::exp(2.0 * s.p.logScale[size_t(i) * 3 + k]);
+        for (int k = 0; k < 3; k++) {
+            double sd = std::exp(double(s.p.logScale[size_t(i) * 3 + k]));
+            s2[k] = sd * sd * double(gate) * double(scaler);
+            if (maxSigma > 0.0f) s2[k] = std::min(s2[k], double(maxSigma) * sd);
+        }
         double u[3];
         for (int c = 0; c < 3; c++) u[c] = (R[0][c] * e[0] + R[1][c] * e[1] + R[2][c] * e[2]) * s2[c];
         for (int r = 0; r < 3; r++) s.p.pos[size_t(i) * 3 + r] += float(R[r][0] * u[0] + R[r][1] * u[1] + R[r][2] * u[2]);

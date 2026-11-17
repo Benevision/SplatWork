@@ -97,6 +97,12 @@ def pick_sector(ds: dict, width: float, fraction: float, by: str) -> tuple[set, 
     M = np.array([c["cameraToWorld"] for c in cams], dtype=np.float64)
     eye, fwd = M[:, :3, 3], M[:, :3, 2]
     centre = np.array(ds.get("sceneCenter") or eye.mean(0), dtype=np.float64)
+    if by in ("low", "high"):   # a height band instead of a sector: views from below (or above) every training photo
+        h = eye @ up if by == "high" else -(eye @ up)
+        inside = h >= np.sort(h)[-max(1, round(fraction * len(cams)))]
+        gap = np.sort(h)[-int(inside.sum())] - np.median(h)
+        return ({cams[i]["id"] for i in np.flatnonzero(inside)},
+                f"{int(inside.sum())} of {len(cams)} cameras, the {by}est by height ({gap:.2f} scene units from the median)")
     if by == "auto":      # an orbit looks inwards; a room capture looks outwards
         inward = np.mean(np.einsum("ij,ij->i", fwd, centre - eye) > 0)
         by = "position" if inward > 0.7 else "direction"
@@ -206,7 +212,8 @@ def sector_main(argv):
     ap.add_argument("--view-clean", type=float, metavar="F", help="with --from: prune run FROM's splat by contribution "
                     "across the training photos (invisible, or seen by under F x the typical number of photos) and score that")
     ap.add_argument("--from", dest="source", help="name of an earlier run in --out")
-    ap.add_argument("--by", default="auto", choices=["auto", "position", "direction"])
+    ap.add_argument("--by", default="auto", choices=["auto", "position", "direction", "low", "high"],
+                    help="low / high: hold out the lowest / highest --fraction of the cameras instead of a sector")
     ap.add_argument("--max-size", type=int, default=1600, help="longest side of the scored renders")
     a = ap.parse_args(argv)
     ds = json.loads((a.dataset / "dataset.json").read_text())

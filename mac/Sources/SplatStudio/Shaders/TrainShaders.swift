@@ -9,7 +9,7 @@ struct RasterParams {
     float4 bg;             // rgb background, w unused
     uint absGrad; uint hasDepth; uint numGaussians; uint step;
     float ssimWeight; float depthWeight; float invNumPixels; float pad;
-    uint sky; float normalWeight; uint pad2; uint pad3;   // sky = 1: dL/dT_final per pixel comes from skyDT (learned skybox)
+    uint sky; float normalWeight; float depthSpread; uint pad3;   // sky = 1: dL/dT_final per pixel comes from skyDT (learned skybox)
 };
 
 // ---------------------------------------------------------------- preprocess (forward)
@@ -316,6 +316,8 @@ kernel void rasterize_backward(device const uint2* ranges [[buffer(0)]],
                                device const float* gradImg [[buffer(8)]],
                                device atomic<float>* acc [[buffer(9)]],
                                device const float* skyDT [[buffer(10)]],
+                               device const float* depthTarget [[buffer(11)]], constant uint2& depthSize [[buffer(12)]],
+                               device const uchar4* target [[buffer(13)]],
                                uint2 tg [[threadgroup_position_in_grid]],
                                uint2 lt [[thread_position_in_threadgroup]],
                                uint tidx [[thread_index_in_threadgroup]],
@@ -343,6 +345,23 @@ kernel void rasterize_backward(device const uint2* ranges [[buffer(0)]],
     float bgDot = rp.sky != 0u ? (inside ? skyDT[pid] : 0.0f) : dot(rp.bg.xyz, dpix.xyz);
     float4 accumRec = float4(0), lastColor = float4(0);
     float lastAlpha = 0.0f;
+    // Depth spread (rp.depthSpread): sum_i w_i |z_i - sensor depth| per pixel, so every splat a ray meets is pulled
+    // to the measured surface and splats off it lose opacity. The depth loss above only fixes the blended depth,
+    // which a see-through stack spread along the ray satisfies too. Skipped at sensor depth edges and masked pixels.
+    float spread = 0.0f, zt = 0.0f, accumRecE = 0.0f, lastE = 0.0f;
+    if (inside && rp.hasDepth != 0u && rp.depthSpread > 0.0f && target[pid].w > 127) {
+        uint dx = min(depthSize.x - 1, pix.x * depthSize.x / rp.width);
+        uint dy = min(depthSize.y - 1, pix.y * depthSize.y / rp.height);
+        float d0 = depthTarget[dy * depthSize.x + dx];
+        if (d0 > 0.0f && isfinite(d0) && dx > 0 && dy > 0 && dx + 1 < depthSize.x && dy + 1 < depthSize.y) {
+            float dl = depthTarget[dy * depthSize.x + dx - 1], dr = depthTarget[dy * depthSize.x + dx + 1];
+            float du = depthTarget[(dy - 1) * depthSize.x + dx], dd = depthTarget[(dy + 1) * depthSize.x + dx];
+            float tol = 0.05f * d0;
+            if (abs(dl - d0) < tol && abs(dr - d0) < tol && abs(du - d0) < tol && abs(dd - d0) < tol) {
+                spread = rp.depthSpread * rp.invNumPixels; zt = d0;
+            }
+        }
+    }
     uint contributor = uint(toDo);
     for (int r = 0; r < rounds; r++, toDo -= 256) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -372,6 +391,13 @@ kernel void rasterize_backward(device const uint2* ranges [[buffer(0)]],
                 lastColor = c;
                 float dLda = dot(c - accumRec, dpix);
                 gr = dchdc * dpix.x; gg = dchdc * dpix.y; gb = dchdc * dpix.z; gdep = dchdc * dpix.w;
+                if (spread > 0.0f) {
+                    float e = abs(c.w - zt);
+                    accumRecE = lastAlpha * lastE + (1.0f - lastAlpha) * accumRecE;
+                    lastE = e;
+                    dLda += spread * (e - accumRecE);
+                    gdep += dchdc * spread * (c.w > zt ? 1.0f : -1.0f);
+                }
                 dLda *= T;
                 lastAlpha = alpha;
                 dLda += (-Tfinal / (1.0f - alpha)) * bgDot;
@@ -1282,7 +1308,7 @@ kernel void adam_sh_compact(device float* param [[buffer(0)]], device const floa
 // 3DGS-MCMC: perturb positions of low-opacity gaussians along their covariance (SGLD noise).
 kernel void mcmc_noise(device float* pos [[buffer(0)]], device const float* logScale [[buffer(1)]],
                        device const float* quat [[buffer(2)]], device const float* opLogit [[buffer(3)]],
-                       constant float4& np [[buffer(4)]],  // x: noiseLR * lrPos, y: seed, z: n
+                       constant float4& np [[buffer(4)]],  // x: noiseLR * lrPos, y: seed, z: n, w: noiseMaxSigma
                        uint i [[thread_position_in_grid]]) {
     if (i >= uint(np.z)) return;
     float o = 1.0f / (1.0f + exp(-opLogit[i]));
@@ -1295,8 +1321,9 @@ kernel void mcmc_noise(device float* pos [[buffer(0)]], device const float* logS
     float4 q = float4(quat[i*4], quat[i*4+1], quat[i*4+2], quat[i*4+3]);
     float ql = length(q); q = ql > 1e-12f ? q / ql : float4(1,0,0,0);
     float3x3 R = quat_to_rot(q);
-    float3x3 M = float3x3(R[0] * s.x, R[1] * s.y, R[2] * s.z);
-    float3 d = (M * transpose(M)) * e * k;
+    float3 w = s * s * k;
+    if (np.w > 0.0f) w = min(w, np.w * s);   // at most np.w standard deviations along each axis (roadmap Q1)
+    float3 d = R * (w * (transpose(R) * e));
     pos[i*3] += d.x; pos[i*3+1] += d.y; pos[i*3+2] += d.z;
 }
 
