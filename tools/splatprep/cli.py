@@ -6,6 +6,8 @@
     python -m splatprep benchmark --dataset D [--dataset D2 ...] [--synth all] [--models a,b] --out DIR
     python -m splatprep export --model sparse/0 --images images --out dataset
     python -m splatprep device
+    python -m splatprep dense --dataset D [--method auto|mvs|depth] [--max-points N] [--add]   # dense points in place
+    python -m splatprep dense --check                                                       # what this computer can do
     python -m splatprep maskserver [--images DIR] [--out DIR] [--device D]   # JSONL SAM 2 click-to-mask loop
 
 With ``--progress-jsonl -`` stdout is reserved for protocol lines: the real
@@ -160,6 +162,29 @@ def cmd_device(args) -> int:
     return 0
 
 
+def cmd_dense(args) -> int:
+    from .dense import available_methods
+
+    if args.check:
+        print(json.dumps(available_methods()))
+        return 0
+    if not args.dataset:
+        sys.stderr.write("dense: --dataset is required (or --check)\n")
+        return 2
+    from .isolation import block_pycolmap
+    from .runner import run_request
+
+    block_pycolmap()
+    dense = {"method": args.method, "mode": "add" if args.add else "replace"}
+    if args.max_points:
+        dense["maxPoints"] = args.max_points
+    req = {"task": "dense", "datasetDir": str(Path(args.dataset).resolve()), "dense": dense, "device": args.device}
+    stats = run_request(req, Path.cwd(), (lambda e: sys.stderr.write(f"\r{e.get('message', '')[:100]:<100}")))
+    sys.stderr.write("\n")
+    print(json.dumps(stats))
+    return 0 if stats.get("status") == "ok" else 1
+
+
 def cmd_maskserver(args) -> int:
     from .isolation import block_pycolmap
 
@@ -228,6 +253,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("device", help="print the selected compute device")
     d.set_defaults(func=cmd_device)
+
+    dn = sub.add_parser("dense", help="dense points for a dataset (multi-view stereo or depth fusion), in place")
+    dn.add_argument("--dataset", default=None)
+    dn.add_argument("--method", default="auto", choices=["auto", "mvs", "depth"])
+    dn.add_argument("--max-points", type=int, default=None)
+    dn.add_argument("--add", action="store_true", help="merge with the sparse points instead of replacing them")
+    dn.add_argument("--device", default=None)
+    dn.add_argument("--check", action="store_true", help="print which methods this computer can run")
+    dn.set_defaults(func=cmd_dense)
 
     ms = sub.add_parser("maskserver", help="keep SAM 2 loaded; answer click-to-mask requests (JSONL on stdin/stdout)")
     ms.add_argument("--images", default=None, help="base directory for relative 'image' paths")

@@ -116,6 +116,12 @@ sparse/0/           # the exported COLMAP model (binary)
 splatprep.log       # COLMAP/GLOMAP output
 ```
 
+With `"dense"` in the request (or `task = dense` on an existing dataset, `datasetDir`), `points3d.ply` is then a dense
+cloud (`points3d_sparse.ply` keeps the sparse one) and `dense.json` says how it was made — see `dense.py` and
+docs/PROTOCOL.md "Dense points". From the shell: `python -m splatprep dense --dataset D [--method auto|mvs|depth]
+[--max-points N] [--add]`; `python -m splatprep dense --check` prints what this computer can run (multi-view stereo
+needs COLMAP or pycolmap built with CUDA; predicted depth needs PyTorch + transformers).
+
 `sceneCenter` = mean camera centre, `sceneExtent` = 1.1 × max camera distance from it,
 `upVector` = −(mean camera +Y axis). `task = masks` → `outputDir/masks/<image stem>.png`.
 
@@ -127,7 +133,7 @@ Progress JSONL on stdout (stdout is reserved: stray prints from libraries go to 
 ```
 
 `progress` is overall job progress (monotonic, 0–1; a repeated value is possible). Stages: `pairs`, `features`, `matching`,
-`verification`, `mapping`, `alignment`, `export`, `masks`, `benchmark`. Exit code 0 / 2.
+`verification`, `mapping`, `alignment`, `export`, `dense`, `masks`, `benchmark`. Exit code 0 / 2.
 
 ### Masks
 

@@ -281,6 +281,12 @@ enum CLI {
                 o.compute = .remote
             }
             if let e = value("--end").flatMap(Double.init) { o.video.endTime = e }
+            // [--dense [auto|mvs|depth]] dense points after the solve; [--dense-max N] their cap
+            if let i = a.firstIndex(of: "--dense") {
+                o.dense.enabled = true
+                if i + 1 < a.count, ["auto", "mvs", "depth"].contains(a[i + 1]) { o.dense.method = a[i + 1] }
+                if let n = value("--dense-max").flatMap(Int.init) { o.dense.maxPoints = n }
+            }
             let sem = DispatchSemaphore(value: 0)
             var exitCode: Int32 = 0
             let start = Date()

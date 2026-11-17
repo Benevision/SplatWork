@@ -127,6 +127,7 @@ class ProjectOptions:
     mapper: str = "auto"                     # sfm.mapper
     camera_model: str = "auto"               # sfm.cameraModel
     refine_capture_poses: bool = True        # sfm.refineCapturePoses
+    dense_points: bool = False               # sfm.densePoints: dense point cloud after the solve (splatprep dense.py)
     mask_models: List[str] = field(default_factory=list)   # mask.model (stacked: each is ANDed in)
     mask_invert: bool = False                # mask.invert
     sky: bool = True                         # mask.sky
@@ -228,6 +229,8 @@ class ProjectOptions:
         if has_priors:
             req["priorPoses"] = "priors.json"
             req["priorMode"] = "auto" if self.refine_capture_poses else "solve"
+        if self.dense_points:
+            req["dense"] = {"method": "auto"}     # COLMAP MVS with CUDA, else fused LiDAR / predicted depth
         return req
 
     def train_config(self) -> Dict[str, Any]:

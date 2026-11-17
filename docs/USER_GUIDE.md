@@ -97,6 +97,23 @@ Easy, every 8th in Advanced), which keeps some photos aside to measure quality h
 their scale and gravity. On a 649-frame bedroom scan it took 3.6 minutes instead of 28 for a full re-solve and gave
 +2.1 dB on held-out photos. If it can't run, the capture's own poses are used.
 
+**Dense points** (off by default) builds a dense point cloud after the cameras are solved, so training starts from
+the scene's surfaces instead of the few sparse points the solve leaves. Its points replace the sparse ones
+(Advanced: *Keep the sparse points too*; the sparse cloud stays in the dataset as `points3d_sparse.ply`). How it is
+made depends on where preparation runs:
+- On a Linux worker with an NVIDIA GPU: COLMAP's multi-view stereo — a depth map per photo against its neighbours,
+  then the depths that agree are fused. This path is untested on real hardware so far.
+- On this Mac, or a worker without CUDA: depth maps are fused. A capture's LiDAR depth is used when it has some; for
+  other photos depth is predicted per photo (Depth Anything V2 Small, Models pack or worker) and scaled to the
+  solve's points.
+
+A point is kept only where at least three photos agree on it. Masked-out pixels and the sky give no points, photos a
+capture or import already holds out aren't used, and the cloud is thinned on a voxel grid to at most 1 million points (Advanced: *Dense point
+cap*). A LiDAR capture takes seconds; 900 video frames with predicted depth took about 2 minutes on an M4 Pro.
+Multi-view stereo takes longer. If none of these can run where preparation runs, the step is skipped with a note and
+training starts from the sparse points. Turning the option on or off for an existing project re-solves its cameras
+(Redo from Cameras).
+
 **Photo locations (GPS).** Phones and drones record where each photo was taken. With *Use photo locations (GPS)* on
 (the default, shown when photos have locations), the imported copies keep only that location (and a drone's height
 above take-off), and learned camera solving uses it:

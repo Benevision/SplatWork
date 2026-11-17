@@ -247,7 +247,9 @@ struct PrepCheckpoints: Sendable {
         let o = o.resolved
         return hash(["poses v1", masks, canonicalJSON(o.poseSolver), o.sfmCameraModel, String(o.objectCaptureHighSensitivity),
                      String(o.refineCapturePoses), String(o.metricScaleFromStereo), String(o.enforceRigConstraints),
-                     o.holdoutInterval.map(String.init) ?? "-", o.maxImageSize.map(String.init) ?? "-"])
+                     o.holdoutInterval.map(String.init) ?? "-", o.maxImageSize.map(String.init) ?? "-"]
+                    // only when on, so turning the option on redoes the cameras but existing projects keep theirs
+                    + (o.dense.enabled ? ["dense", canonicalJSON(o.dense)] : []))
     }
 
     static func doneFingerprint(after poses: String) -> String { hash(["done v1", poses]) }

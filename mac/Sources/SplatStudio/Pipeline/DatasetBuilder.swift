@@ -72,6 +72,32 @@ enum PoseSolverChoice: Codable, Hashable, Sendable {
     case fromCapture
 }
 
+/// Dense points: a dense point cloud built after the camera solve, so training starts from surfaces instead of the
+/// sparse SfM points (splatprep `dense.py`). Off by default.
+struct DensePointsOptions: Codable, Hashable, Sendable {
+    var enabled = false
+    /// auto | mvs (COLMAP multi-view stereo, needs CUDA: an NVIDIA worker) | depth (fuse LiDAR / predicted depth)
+    var method = "auto"
+    /// Cap of the cloud; the voxel cell grows until it fits.
+    var maxPoints = 1_000_000
+    /// replace the sparse points, or add to them
+    var keepSparse = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = c(.enabled, enabled); method = c(.method, method); maxPoints = c(.maxPoints, maxPoints)
+        keepSparse = c(.keepSparse, keepSparse)
+    }
+
+    /// The splatprep request part (`dense` of an sfm request / a dense task); nil when off.
+    var request: ProcessingRequest.Dense? {
+        guard enabled else { return nil }
+        return .init(method: method, maxPoints: maxPoints, mode: keepSparse ? "add" : "replace")
+    }
+}
+
 /// All dataset-preparation options. Every field has a default; decoding tolerates missing keys.
 struct PrepOptions: Codable, Hashable, Sendable {
     /// Photo-folder ingest (blur / duplicate rejection, …).
@@ -119,6 +145,8 @@ struct PrepOptions: Codable, Hashable, Sendable {
     var enforceRigConstraints: Bool = true
     /// Keep intermediate files (frames.json, splatprep work dirs).
     var keepIntermediates: Bool = false
+    /// Dense points after the camera solve (off by default).
+    var dense: DensePointsOptions = .init()
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -134,6 +162,7 @@ struct PrepOptions: Codable, Hashable, Sendable {
         refineCapturePoses = c(.refineCapturePoses, refineCapturePoses)
         metricScaleFromStereo = c(.metricScaleFromStereo, metricScaleFromStereo)
         enforceRigConstraints = c(.enforceRigConstraints, enforceRigConstraints); keepIntermediates = c(.keepIntermediates, keepIntermediates)
+        dense = c(.dense, dense)
     }
 
     /// Applies the global `maxImageSize` / `holdoutInterval` to the per-source options.
@@ -197,6 +226,7 @@ enum DatasetBuilder {
         let ingestP = PipelineProgress.scaled(progress, 0...0.35)
         let maskP = PipelineProgress.scaled(progress, 0.35...0.45)
         let poseP = PipelineProgress.scaled(progress, 0.45...0.97)
+        let denseP = PipelineProgress.scaled(progress, 0.97...0.99)
 
         // Checkpoints (dataset/.prep): every stage whose inputs and settings are unchanged since a run that got
         // past it is skipped. A camera solve that already finished is simply reused.
@@ -240,6 +270,7 @@ enum DatasetBuilder {
                 default: return o.refineCapturePoses
                 }
             }()
+            var solvedDense: JSONValue? = nil
             if refine {
                 // Refine with SfM, using the capture poses (and per-frame intrinsics) as priors: splatprep then
                 // triangulates with them and adjusts only the poses (prior_refine.py) instead of solving.
@@ -259,7 +290,7 @@ enum DatasetBuilder {
                     // Refinement is a bonus: without the Models pack / an offline worker, keep the capture poses.
                     progress?(PipelineProgress(stage: "Camera solving", fraction: -1,
                         message: "couldn't refine the capture poses (\(error.localizedDescription)) — using them as recorded"))
-                    return finish(ds, progress)
+                    return finish(try await DensePoints.apply(ds, o, progress: denseP), progress)
                 }
                 // SfM that places only a fraction of the photos (bad masks, textureless rooms) must never
                 // replace the capture: keep the iPhone's own ARKit poses, which are complete, and say so.
@@ -281,23 +312,27 @@ enum DatasetBuilder {
                         if ds.manifest.cameras[i].group == nil { ds.manifest.cameras[i].group = c.group }
                     }
                     try ds.save()
+                    solvedDense = sol.stats["dense"]
                 } else {
                     progress?(PipelineProgress(stage: "Camera solving", fraction: -1,
                         message: "SfM placed only \(sol.poses.count) of \(frames.frames.count) photos — keeping the capture's own (ARKit) camera poses"))
                 }
             }
+            ds = try await DensePoints.apply(ds, o, solved: solvedDense, progress: denseP)
             try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) cameras" + (refine ? " (refined)" : ""))
             return finish(ds, progress)
         case .colmap(let p, let images):
-            let ds = try await importedAndMasked(0.85...0.97) {
+            var ds = try await importedAndMasked(0.85...0.97) {
                 try await COLMAPImporter.importProject(at: p, imagesDir: images, options: o.importing, into: dir, progress: PipelineProgress.scaled(progress, 0...0.85))
             }
+            ds = try await DensePoints.apply(ds, o, progress: denseP)
             try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) cameras (from COLMAP)")
             return finish(ds, progress)
         case .nerfstudio(let t):
-            let ds = try await importedAndMasked(0.85...0.97) {
+            var ds = try await importedAndMasked(0.85...0.97) {
                 try await NerfstudioImporter.importDataset(transforms: t, options: o.importing, into: dir, progress: PipelineProgress.scaled(progress, 0...0.85))
             }
+            ds = try await DensePoints.apply(ds, o, progress: denseP)
             try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) cameras (from Nerfstudio)")
             return finish(ds, progress)
         default: break
@@ -394,6 +429,7 @@ enum DatasetBuilder {
         }
         ds.recomputeSceneBounds()
         try ds.save()
+        ds = try await DensePoints.apply(ds, o, solved: sol.stats["dense"], progress: denseP)
         try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) of \(frames.frames.count) frames placed")
         return finish(ds, progress)
     }
@@ -485,6 +521,7 @@ enum DatasetBuilder {
             sp.priorPoses = priors
             sp.resizeMax = o.maxImageSize
             sp.skipTakeoff = o.photos.skipTakeoff ? nil : false
+            sp.dense = DensePoints.inSolve(o, frames: frames)
             if o.compute != .thisMac, let worker {
                 sol = try await RemoteSplatPrepPoseSolver(client: worker, local: sp).solve(frames, progress: progress)
             } else {

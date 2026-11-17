@@ -288,6 +288,21 @@ to run its New Project pipeline on its own project folders without uploading. Ot
 datasets: `GET /v1/datasets` leaves them out (and never lists the folder path), and jobs, compose, archive and
 delete answer `404` for them.
 
+**Dense points (workers with capability `dense`, the Linux release after 1.7.15).** An sfm request with `"dense"` (or `"task": "dense"` with
+`"datasetDir"`, relative, on an existing dataset) builds a dense point cloud after the export (splatprep
+`dense.py`). `method`: `auto` (COLMAP multi-view stereo where COLMAP or pycolmap was built with CUDA, else depth-map
+fusion), `mvs`, `depth` (fuse the cameras' `depth` maps, or with none, Depth Anything V2 Small predictions fitted to
+the sparse points). A point needs `minViews` (3) photos that agree on it; `mask` / `sky` pixels and holdout cameras
+give none; the cloud is merged on a voxel grid until it has at most `maxPoints` (1 M, 10 k–10 M). Other keys:
+`mode` (`replace` | `add`), `maxImageSize` (MVS, 1200), `depthSize` (fusion, 384), `neighbours` (6), `voxelSize`
+(0 = automatic). The result replaces `points3d.ply` (the sparse cloud is kept as `points3d_sparse.ply`);
+`dense.json` says what was done: `{"status": "ok" | "skipped" | "failed", "method", "depthSource": "sensor" |
+"predicted", "numPoints", "reason", "seconds", …}`. It never fails the solve: when no method can run, the status is
+`skipped` with the reason, and the sparse points stay. COLMAP's PatchMatch and fusion caches are capped at a quarter
+of the computer's memory (their default is 32 GB) and run under the same memory guard as the mapper. Progress stage:
+`dense` (it takes the GPU lease). `/v1/info` → `"dense": {"mvs": bool, "mvsTool": "colmap" | "pycolmap" | null,
+"depth": true, "predictedDepth": bool}` (null without the capability).
+
 **Mask editor clicks (worker ≥ 1.4.0, capability `maskpreview`).** `POST /v1/process` also accepts splatprep's
 `"task": "maskpreview"` (it existed in splatprep for the Mac's local mask server; the worker now lets it through
 `validate_request`): one image, SAM 2 point / box prompts → `outputDir/preview.png`.
@@ -476,7 +491,7 @@ and the worker exposes the same request over HTTP. A **ProcessingRequest**:
 
 ```jsonc
 {
-  "task": "sfm" | "masks" | "benchmark",
+  "task": "sfm" | "masks" | "benchmark" | "dense",
   "imagesDir": "images",                 // relative to the uploaded/working dir
   "outputDir": "out",
   "features": "superpoint_lightglue",    // see ids below (task = sfm)
@@ -501,6 +516,9 @@ and the worker exposes the same request over HTTP. A **ProcessingRequest**:
                                          // look-at pairs, triangulate with the priors, pose-only BA ×2 (no mapper,
                                          // capture intrinsics kept; falls back to the priors if implausible);
                                          // solve: full SfM, priors only for pairs + Sim3 alignment
+  "dense": {"method": "auto",            // optional (splatprep ≥ 2026-11-17, workers with capability "dense"):
+            "maxPoints": 1000000,        // dense points after the export, see "Dense points" below; true = defaults
+            "mode": "replace"},
   "maskModel": "sam2_auto" | "sky" | "person",   // task = masks
   "maskPrompt": { "points": [[x,y,label]], "boxes": [[x0,y0,x1,y1]] },   // optional, first image coords
   "invertMask": false

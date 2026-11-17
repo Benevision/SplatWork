@@ -6,7 +6,7 @@ import simd
 
 /// `ProcessingRequest` of PROTOCOL.md §6 (sent to `python -m splatprep run` or worker `/v1/process`).
 struct ProcessingRequest: Codable, Hashable, Sendable {
-    enum Task: String, Codable, Sendable { case sfm, masks, benchmark, frames }
+    enum Task: String, Codable, Sendable { case sfm, masks, benchmark, frames, dense }
     var task: Task
     var imagesDir: String = "images"
     var outputDir: String = "out"
@@ -58,6 +58,16 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var clipTravel: [String: Double]? = nil
     /// task = sfm: leave out a drone flight's take-off / landing shots before solving (splatprep default: on).
     var skipTakeoff: Bool? = nil
+    /// task = sfm: dense points after the export (splatprep `dense.py`); task = dense: their options.
+    var dense: Dense? = nil
+    /// task = dense: the dataset folder (relative to the work dir) whose points become dense.
+    var datasetDir: String? = nil
+
+    struct Dense: Codable, Hashable, Sendable {
+        var method: String = "auto"
+        var maxPoints: Int? = nil
+        var mode: String? = nil
+    }
 
     struct VHS: Codable, Hashable, Sendable {
         var analyseOnly: Bool? = nil
@@ -265,6 +275,8 @@ struct SplatPrepPoseSolver: PoseSolver {
     var useMasks: Bool = true
     /// Leave out a drone flight's take-off / landing shots (nil: splatprep's default, on).
     var skipTakeoff: Bool? = nil
+    /// Dense points after the solve (splatprep runs them on the exported dataset).
+    var dense: ProcessingRequest.Dense? = nil
 
     /// Builds the request for a frame set (also used for remote `/v1/process`).
     func request(for frames: FrameSet) -> ProcessingRequest {
@@ -273,6 +285,7 @@ struct SplatPrepPoseSolver: PoseSolver {
         r.features = features; r.matching = matching; r.mapper = mapper; r.cameraModel = cameraModel
         r.maxKeypoints = maxKeypoints; r.resizeMax = resizeMax; r.priorPoses = priorPoses
         r.skipTakeoff = skipTakeoff
+        r.dense = dense
         let sizes = Set(frames.frames.map { "\($0.width)x\($0.height)" })
         r.singleCamera = sizes.count == 1 && frames.rig == nil
         if frames.rig == nil, !frames.isMultiViewRig, frames.frames.contains(where: { $0.cameraGroup != nil }) {
@@ -317,7 +330,7 @@ struct SplatPrepPoseSolver: PoseSolver {
         let stats = try await runner.run(req, workDir: frames.root, progress: progress)
         var sol = try Self.readSolution(sfmDir: frames.root.appendingPathComponent(req.outputDir), frames: frames, prefix: req.outputDir,
                                         preferOutputImages: cameraModel != "pinhole")
-        sol.stats = stats
+        for (k, v) in stats { sol.stats[k] = v }
         return sol
     }
 
@@ -351,6 +364,10 @@ struct SplatPrepPoseSolver: PoseSolver {
             sol.poses[f.image] = p
         }
         if let pu = ds.pointCloudURL, FileManager.default.fileExists(atPath: pu.path) { sol.points = try PLYCodec.readPointCloud(url: pu) }
+        // splatprep's dense step (dense.json): its result is in the points above, or why it didn't run
+        if let d = try? Data(contentsOf: sfmDir.appendingPathComponent("dense.json")), let v = try? JSONDecoder().decode(JSONValue.self, from: d) {
+            sol.stats["dense"] = v
+        }
         return sol
     }
 }

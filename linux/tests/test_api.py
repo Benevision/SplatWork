@@ -77,7 +77,10 @@ def test_info(client):
     assert isinstance(info["gpus"], list)
     assert info["backend"].startswith("gsplat")
     assert info["busy"] is False and info["queueLength"] == 0
-    assert info["capabilities"] == ["train", "process", "chain", "stream", "maskpreview", "priority", "census", "pause", "pipeline"]
+    # "dense" (after 1.7.15) only where splatprep has its dense step, with what it can do in info["dense"]
+    assert ("dense" in info["capabilities"]) == (info["dense"] is not None)
+    caps = [c for c in info["capabilities"] if c != "dense"]
+    assert caps == ["train", "process", "chain", "stream", "maskpreview", "priority", "census", "pause", "pipeline"]
     assert info["models"] == ["superpoint_lightglue"]
 
 

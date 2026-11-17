@@ -54,6 +54,10 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
 - SplatWork Capture's Stereo mode (wide + ultra-wide pairs) is built but not yet recorded on a real iPhone. Whether
   each phone delivers the lens calibration and depth maps alongside both photos is still to confirm. SplatWork for
   Linux doesn't import stereo bundles yet (Mac only).
+- Dense points (2026-11-17, off by default): depth-map fusion was run on real datasets on the Mac (LiDAR capture,
+  predicted depth on a 927-frame video) and through a local worker. COLMAP multi-view stereo, the NVIDIA path, is
+  untested on real hardware: it has only run against a stand-in `colmap` in `tools/tests/test_dense.py`. Test on
+  BensPC with `python -m splatprep dense --check`, then `python -m splatprep dense --dataset <dataset copy>`.
 - The colour-correction safeguard has not yet fired on real data (healthy runs stay quiet; the failure it targets
   was seen once, on a wrong camera solve).
 - The Windows installer isn't code-signed, so SmartScreen warns on first run.

@@ -77,6 +77,7 @@ enum RemotePipeline {
         r.cameraModel = o.sfmCameraModel
         r.resizeMax = o.maxImageSize
         r.skipTakeoff = o.photos.skipTakeoff ? nil : false
+        r.dense = o.dense.request     // the worker makes the dense points right after its solve
         return (r, sequential)
     }
 
@@ -123,6 +124,10 @@ enum RemotePipeline {
         let fps = PrepCheckpoints.fingerprints(source, o)
         let host = worker.baseURL.host ?? info.name
         let uploadP = PipelineProgress.scaled(progress, 0.05...0.15)
+        if o.dense.enabled && !info.canDensify {
+            progress(PipelineProgress(stage: DensePoints.stage, fraction: -1, message:
+                "\(info.name) can't build dense points yet (it needs a SplatWork for Linux newer than 1.7.15) — training there starts from the sparse points"))
+        }
         var frames: FrameSet? = nil
         var masksDone = false
         if let m = cp.frames(.masks, fingerprint: fps[.masks]!) {

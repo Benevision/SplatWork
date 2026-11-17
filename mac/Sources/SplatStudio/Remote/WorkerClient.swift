@@ -50,6 +50,8 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     var canProcess: Bool { capabilities?.contains("process") ?? false }
     /// Worker ≥ 1.3 with PyAV: splits videos (incl. 360°) itself (`task: frames`).
     var canExtractFrames: Bool { capabilities?.contains("frames") ?? false }
+    /// SplatWork for Linux after 1.7.15: dense points after the camera solve (sfm request `dense`, `task: dense`).
+    var canDensify: Bool { capabilities?.contains("dense") ?? false }
     /// Restores old home video (frames request `vhs`, sfm `cameraGroups`): SplatWork for Linux 1.6.0+.
     var canRestoreHomeVideo: Bool { capabilities?.contains("homevideo") ?? false }
     /// Worker ≥ 1.3.8: processing outputs stay on the worker as datasets (`outputDatasetId`), datasets can be

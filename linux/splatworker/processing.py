@@ -47,6 +47,27 @@ def homevideo_available() -> bool:
         return False
 
 
+_dense_cache: Dict[str, Any] = {}
+
+
+def dense_methods(refresh: bool = False) -> Any:
+    """splatprep's dense-points methods here (``splatprep.dense.available_methods()``: {"mvs", "mvsTool", "depth",
+    "predictedDepth"}), or None when this splatprep has no dense step. Checked once (it asks COLMAP / pycolmap
+    whether they were built with CUDA)."""
+    if "v" in _dense_cache and not refresh:
+        return _dense_cache["v"]
+    v = None
+    try:
+        if splatprep_available() and importlib.util.find_spec("splatprep.dense") is not None:
+            from splatprep.dense import available_methods  # type: ignore
+
+            v = available_methods()
+    except Exception:  # noqa: BLE001
+        v = None
+    _dense_cache["v"] = v
+    return v
+
+
 def available_models() -> List[str]:
     """``splatprep.models.available_models()`` if importable, else []."""
     if not splatprep_available():
@@ -74,8 +95,8 @@ def validate_request(request: Any) -> Dict[str, Any]:
     if not isinstance(request, dict):
         raise ProcessingError("request must be a JSON object")
     task = request.get("task")
-    if task not in ("sfm", "masks", "benchmark", "frames", "maskpreview"):
-        raise ProcessingError("request.task must be one of 'sfm', 'masks', 'benchmark', 'frames', 'maskpreview'")
+    if task not in ("sfm", "masks", "benchmark", "frames", "maskpreview", "dense"):
+        raise ProcessingError("request.task must be one of 'sfm', 'masks', 'benchmark', 'frames', 'maskpreview', 'dense'")
     req = dict(request)
     req["imagesDir"] = _safe_rel(req.get("imagesDir", "images"), "imagesDir")
     req["outputDir"] = _safe_rel(req.get("outputDir", "out"), "outputDir")
@@ -90,6 +111,10 @@ def validate_request(request: Any) -> Dict[str, Any]:
             if st.get("rightVideo") is not None:
                 st = dict(st, rightVideo=_safe_rel(st["rightVideo"], "stereo.rightVideo"))
             req["stereo"] = st
+    if task == "dense" and req.get("datasetDir") is not None:
+        req["datasetDir"] = _safe_rel(req["datasetDir"], "datasetDir")
+    if req.get("dense") is not None and not isinstance(req["dense"], (bool, dict)):
+        raise ProcessingError("request.dense must be true or an object")
     if task == "maskpreview":
         if not isinstance(req.get("maskPrompts"), list) or not req["maskPrompts"]:
             raise ProcessingError("request.maskPrompts must be a non-empty list for task 'maskpreview'")

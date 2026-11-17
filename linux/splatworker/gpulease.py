@@ -24,14 +24,15 @@ from typing import Any, Callable, Dict, Optional
 
 # stages that need the GPU, per splatprep task; None = the whole task
 GPU_STAGES: Dict[str, Optional[frozenset]] = {
-    "sfm": frozenset({"pairs", "features", "matching"}),   # learned retrieval / features / matchers
+    "sfm": frozenset({"pairs", "features", "matching", "dense"}),   # learned retrieval / features / matchers, dense points
+    "dense": None,                                          # PatchMatch stereo (CUDA) / depth model
     "masks": None,                                          # SAM 2, sky, people: all on the GPU
     "maskpreview": None,
     "benchmark": None,
     "frames": frozenset({"splitting 360° video", "extracting stereo frames"}),   # resampling / stereo on torch
 }
 # rough peak GPU memory of a stage (MB): a lease beside a running training job needs this much free
-NEED_MB: Dict[str, int] = {"masks": 6000, "maskpreview": 4000, "features": 3000, "matching": 4000, "pairs": 2000}
+NEED_MB: Dict[str, int] = {"dense": 6000, "masks": 6000, "maskpreview": 4000, "features": 3000, "matching": 4000, "pairs": 2000}
 DEFAULT_NEED_MB = 4000
 MARGIN_MB = 1024
 

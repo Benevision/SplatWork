@@ -166,6 +166,8 @@ class NewProjectDialog(Adw.Window):
         self.refine_row = switch_row("Refine capture poses", o.refine_capture_poses,
                                      lambda v: setattr(o, "refine_capture_poses", v), "sfm.refineCapturePoses")
         cams.add(self.refine_row)
+        cams.add(switch_row("Dense points", o.dense_points, lambda v: setattr(o, "dense_points", v), "sfm.densePoints",
+                            "A dense point cloud after solving, so training starts from surfaces"))
         self.cams_group = cams
         page.add(cams)
 

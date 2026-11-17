@@ -1,13 +1,13 @@
 # SplatWork — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 121 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 125 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
 - [Viewer](#viewer) — 20 settings
 - [Editing](#editing) — 7 settings
 - [Sources & frame extraction](#sources--frame-extraction) — 18 settings
-- [Camera solving (SfM)](#camera-solving-sfm) — 10 settings
+- [Camera solving (SfM)](#camera-solving-sfm) — 14 settings
 - [Masking](#masking) — 4 settings
 - [Training — basics](#training--basics) — 9 settings
 - [Training — densification](#training--densification) — 13 settings
@@ -790,6 +790,10 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 121 sett
 | [All images from one camera](#all-images-from-one-camera) | On | – | Advanced |
 | [Keypoints per image](#keypoints-per-image) | 4096 | 512–16384 | Advanced |
 | [Refine capture poses](#refine-capture-poses) | On | – | Advanced |
+| [Dense points](#dense-points) | Off | – | Easy |
+| [Dense method](#dense-method) | Automatic | – | Advanced |
+| [Dense point cap](#dense-point-cap) | 1 million | 250,000–4 million | Advanced |
+| [Keep the sparse points too](#keep-the-sparse-points-too) | Off | – | Advanced |
 
 ### Camera solver
 
@@ -951,6 +955,77 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 121 sett
 **When to change it**
 
 - If it can't run (no Models pack, worker offline) or its corrections look implausible, the capture poses are used as recorded.
+
+### Dense points
+
+> Builds a dense point cloud after the camera solve, so training starts from surfaces instead of the sparse solve points.
+
+| | |
+|---|---|
+| **Default** | Off |
+| **Mode** | Easy |
+| **ID** | `sfm.densePoints` |
+
+**How it works.** The camera solve leaves a few thousand to a few hundred thousand points, mostly on textured corners; training has to grow everything else from them.
+
+- With this on, a dense reconstruction runs between solving and training and its points replace the sparse ones (the sparse cloud is kept as points3d_sparse.ply).
+- How: on a Linux worker with an NVIDIA GPU, COLMAP's multi-view stereo (PatchMatch depth per photo against its neighbours, then fusion of the depths that agree) — untested on real hardware so far.
+- Elsewhere, depth maps are fused: the capture's own LiDAR depth when it has some, else depth predicted per photo (Depth Anything V2 Small, Models pack or worker) and scaled to the solve's points.
+- Either way a point is kept only where at least three photos agree on it, masked-out pixels and the sky give no points, photos already held out (captures, imports) aren't used, and the cloud is merged on a voxel grid down to the point cap.
+- Typical cost: seconds for a LiDAR capture, about 2 minutes for 900 photos with predicted depth on an M4 Pro, longer for multi-view stereo.
+- Turning it on or off redoes the camera solve (Redo from Cameras).
+
+**When to change it**
+
+- If it can't run here, preparation goes on with the sparse points and says why.
+
+### Dense method
+
+> Automatic, multi-view stereo, or fusing depth maps.
+
+| | |
+|---|---|
+| **Default** | Automatic |
+| **Mode** | Advanced |
+| **ID** | `sfm.denseMethod` |
+
+**How it works.** Automatic uses COLMAP multi-view stereo where COLMAP was built with CUDA (an NVIDIA worker) and fuses depth maps everywhere else.
+
+- Multi-view stereo (untested on real hardware so far) usually gives the most accurate surfaces on textured scenes but needs CUDA; asked for where there is none, depth maps are fused instead.
+- Fuse depth maps uses LiDAR / stereo depth when most photos have it, else predicted depth — fast, and fills plain walls that stereo matching can't, but predicted depth is less exact (agreement between three photos removes most of its errors).
+
+### Dense point cap
+
+> Most points the dense cloud keeps.
+
+| | |
+|---|---|
+| **Default** | 1 million |
+| **Range** | 250,000–4 million |
+| **Mode** | Advanced |
+| **ID** | `sfm.denseMaxPoints` |
+
+**How it works.** Points are merged on a voxel grid; the cell grows until the cloud fits under the cap, so memory stays bounded while fusing and the cloud is spread evenly instead of piling up where many photos overlap.
+
+- Training then grows and prunes from there.
+
+**When to change it**
+
+- More points start training closer to the final detail but use more memory at the start.
+
+### Keep the sparse points too
+
+> Adds the dense points to the solve's sparse points instead of replacing them.
+
+| | |
+|---|---|
+| **Default** | Off |
+| **Mode** | Advanced |
+| **ID** | `sfm.denseKeepSparse` |
+
+**How it works.** Off: the dense cloud replaces the sparse one.
+
+- On: both are used (merged under the same cap) — the sparse points cover distant or thin structures the dense step may have filtered out.
 
 ## Masking
 

@@ -18,6 +18,9 @@ Extra (optional) request keys understood here, beyond §6:
 * ``clipTravel``      — sfm with cameraGroups: {clip id: camera travel from vhs.json}; clips the solve glued onto
   another clip (cameras on one spot) or gave an impossible zoom are left out (``vhs.check_clips``).
 * ``datasets`` / ``models`` — task = benchmark (see benchmark.py).
+* ``dense``           — sfm: after export, a dense point cloud replaces (or joins) ``points3d.ply`` (dense.py):
+  ``true`` or ``{"method": "auto"|"mvs"|"depth", "maxPoints", "mode": "replace"|"add", ...}``.
+  task = dense: the same on an existing dataset (``datasetDir``, default ``outputDir``).
 * mask keys (task = masks / maskpreview) — ``maskPrompts``, ``maskClasses``, ``maskThreshold``,
   ``dilatePixels``, ``replaceMasks``, ... (see masks/prompts.py and README).
 """
@@ -75,8 +78,15 @@ def normalize_request(request: dict) -> dict:
     req = dict(DEFAULTS)
     req.update({k: v for k, v in request.items() if v is not None})
     task = req.get("task")
-    if task not in ("sfm", "masks", "benchmark", "maskpreview", "frames"):
-        raise RequestError(f"unknown task: {task!r} (expected sfm | masks | benchmark | maskpreview | frames)")
+    if task not in ("sfm", "masks", "benchmark", "maskpreview", "frames", "dense"):
+        raise RequestError(f"unknown task: {task!r} (expected sfm | masks | benchmark | maskpreview | frames | dense)")
+    if req.get("dense") is not None:
+        from .dense import options as dense_options
+
+        try:
+            dense_options(req["dense"])
+        except SplatPrepError as e:
+            raise RequestError(str(e)) from None
     if task == "frames" and not req.get("video"):
         raise RequestError("task frames needs 'video'")
     if task == "sfm" and req["matching"] not in ("sequential", "exhaustive", "retrieval", "spatial", "auto"):
@@ -99,6 +109,8 @@ def run_request(request: dict, workdir: Path, progress: Optional[ProgressFn] = N
         stats = run_maskpreview_task(req, workdir, progress)
     elif req["task"] == "frames":
         stats = run_frames_task(req, workdir, progress)
+    elif req["task"] == "dense":
+        stats = run_dense_task(req, workdir, progress)
     else:
         from .benchmark import run_benchmark_request
 
@@ -194,7 +206,10 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         if ppath is None or not ppath.exists():
             raise RequestError(f"priorPoses not found: {req['priorPoses']}")
         priors = match_priors(load_priors(ppath), names)
-    sp = StagedProgress(progress, SFM_STAGES)
+    from .dense import options as dense_options
+
+    dense = dense_options(req.get("dense"))
+    sp = StagedProgress(progress, SFM_STAGES + ([("dense", 0.25)] if dense else []))
     skipped_takeoff = []
     if not priors and req.get("skipTakeoff", True):
         from .gps import takeoff_shots
@@ -303,9 +318,57 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
     if "gpsCheck" in stats:   # for callers that only see the output folder (a worker's whole-pipeline job)
         (out_dir / "gps_check.json").write_text(json.dumps({k: v for k, v in stats["gpsCheck"].items()
                                                             if k not in ("outliers", "worst")}, indent=1))
+    if dense:
+        stats["dense"] = run_dense_step(dense, out_dir, image_dir, req, workdir, device, sp)
     if not req.get("keepWork", False):
         shutil.rmtree(work, ignore_errors=True)
     return stats
+
+
+def run_dense_step(dense: dict, out_dir: Path, image_dir: Path, req: dict, workdir: Path, device: str,
+                   sp: StagedProgress) -> dict:
+    """The exported dataset in ``out_dir`` gets dense points. A failure (a tool missing, out of memory) is reported
+    and the sparse points stay: the camera solve before it is never lost."""
+    from .dense import densify
+
+    exported = bool(req.get("exportImages", True))
+    mask_dirs = []
+    for key, k in (("mask", "masksDir"), ("sky", "skyMasksDir")):
+        d = _resolve(workdir, req.get(k))
+        if d is not None and d.is_dir():
+            mask_dirs.append((key, d))
+    sp.update("dense", 0.0, "dense points: starting")
+    try:
+        info = densify(out_dir, dense, sp.sub("dense"), lambda m: sp.message("dense", m), device=device,
+                       image_root=None if exported else image_dir, mask_dirs=mask_dirs,
+                       log_path=out_dir / "splatprep.log")
+    except Exception as e:  # noqa: BLE001
+        info = {"status": "failed", "reason": str(e)[:500]}
+        try:
+            (out_dir / "dense.json").write_text(json.dumps(info, indent=1))
+        except OSError:
+            pass
+    if info.get("status") == "ok":
+        sp.message("dense", f"dense points: {info['numPoints']:,} ({info['method']}"
+                            + (f", {info['depthSource']} depth" if info.get("depthSource") else "") + f", {info['seconds']} s)")
+    else:
+        sp.message("dense", f"dense points {info.get('status')}: {info.get('reason')} — training starts from the sparse points")
+    sp.update("dense", 1.0, "dense points done")
+    return info
+
+
+def run_dense_task(req: dict, workdir: Path, progress: ProgressFn) -> dict:
+    """Dense points for a finished dataset (``datasetDir``, default ``outputDir``) in place."""
+    from .dense import options as dense_options
+
+    ds_dir = _resolve(workdir, req.get("datasetDir") or req["outputDir"])
+    if ds_dir is None or not (ds_dir / "dataset.json").is_file():
+        raise RequestError(f"no dataset.json in {req.get('datasetDir') or req['outputDir']}")
+    sp = StagedProgress(progress, [("dense", 1.0)])
+    device = select_device(req.get("device"))
+    info = run_dense_step(dense_options(req.get("dense", True)) or dense_options(True), ds_dir, ds_dir,
+                          {**req, "exportImages": True}, workdir, device, sp)
+    return {"task": "dense", "device": device, **info, "status": info.get("status", "failed")}
 
 
 class _AllowMO:  # minimal stand-in so Backend.require() accepts matching-only

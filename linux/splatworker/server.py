@@ -1347,6 +1347,9 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
 
         if splatprep_available():         # checked in the background: importing PyTorch takes a few seconds
             threading.Thread(target=processing_device, daemon=True, name="splatworker-processing-device").start()
+            from .processing import dense_methods
+
+            threading.Thread(target=dense_methods, daemon=True, name="splatworker-dense-methods").start()
         if settings.mdns:
             from .discovery import Advertiser
 
@@ -1477,6 +1480,13 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             from .gpu import processing_device
 
             processing = processing_device()    # ≥ 1.6.0: POST /v1/pipeline (whole pipeline, client may go offline)
+        dense = None
+        if "process" in caps:
+            from .processing import dense_methods
+
+            dense = dense_methods()
+            if dense is not None:
+                caps = caps + ["dense"]   # after 1.7.15: sfm request "dense" / task "dense" (dense points before training)
         if settings.local_enabled:
             caps = caps + ["local"]       # ≥ 1.4.0: POST /v1/datasets/local (the desktop app on this PC only)
         try:
@@ -1494,6 +1504,9 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             "slots": [s.info(busy=s.key in manager.running or s.key in manager.leases) for s in manager.slots],
             # ≥ 1.7.13: {"device": "cuda" | "rocm" | "xpu" | "cpu", "gpu", "reason"} — null without "process"
             "processing": processing,
+            # after 1.7.15: dense points here — {"mvs": bool, "mvsTool": "colmap" | "pycolmap" | null, "depth": true,
+            # "predictedDepth": bool}; null without "dense"
+            "dense": dense,
             # ≥ 1.7.6: processing jobs run in a CPU pool and take their GPU only for GPU steps (gpulease.py);
             # JobStatus "resource": "cpu" | "gpu" | "waiting-gpu"
             "cpuJobs": {"limit": max(1, int(settings.cpu_jobs)), "running": len(manager.cpu_running),

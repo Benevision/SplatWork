@@ -422,6 +422,29 @@ struct NewProjectSheet: View {
                     Toggle("", isOn: $options.refineCapturePoses).labelsHidden()
                 }
             }
+            SettingRow(id: "sfm.densePoints") { Toggle("", isOn: $options.dense.enabled).labelsHidden() }
+            if options.dense.enabled {
+                if effectiveMode == .advanced {
+                    SettingRow(id: "sfm.denseMethod") {
+                        Picker("", selection: $options.dense.method) {
+                            Text("Automatic").tag("auto")
+                            Text("Multi-view stereo (NVIDIA worker; untested on real hardware)").tag("mvs")
+                            Text("Fuse depth maps").tag("depth")
+                        }.labelsHidden().fixedSize().frame(maxWidth: 380, alignment: .trailing)
+                    }
+                    SettingRow(id: "sfm.denseMaxPoints") {
+                        Picker("", selection: $options.dense.maxPoints) {
+                            Text("250,000").tag(250_000); Text("500,000").tag(500_000); Text("1 million").tag(1_000_000)
+                            Text("2 million").tag(2_000_000); Text("4 million").tag(4_000_000)
+                        }.labelsHidden().fixedSize().frame(maxWidth: 380, alignment: .trailing)
+                    }
+                    SettingRow(id: "sfm.denseKeepSparse") { Toggle("", isOn: $options.dense.keepSparse).labelsHidden() }
+                }
+                if options.compute == .thisMac {
+                    Label("On this Mac dense points come from the capture's LiDAR depth, or from depth predicted per photo (Models pack). Multi-view stereo needs a worker with an NVIDIA GPU (untested on real hardware).", systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         PanelSection(title: "Masking", systemImage: "person.crop.rectangle") {
             SettingRow(id: "mask.model") {

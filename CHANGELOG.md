@@ -6,6 +6,32 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Dense points (Mac; SplatWork for Linux, next release):** a new option under New Project → Camera solving, off by
+  default. After the camera solve it builds a dense point cloud, and training starts from it instead of the sparse
+  solve points. Like Spirula Studio's dense reconstruction, it keeps only points that several photos agree on, but it
+  is SplatWork's own method:
+  - On a worker with an NVIDIA GPU, COLMAP multi-view stereo runs: `image_undistorter`, then `patch_match_stereo`
+    with geometric consistency, then `stereo_fusion`. It uses the COLMAP CLI or pycolmap, whichever was built with
+    CUDA. This path is untested on real hardware so far (only with a stand-in `colmap` in the tests).
+  - Everywhere else, depth maps are fused: a capture's LiDAR depth, or depth predicted per photo (Depth Anything V2
+    Small) and fitted to the sparse points. A pixel becomes a point only when at least 2 of its 6 best neighbouring
+    photos agree with its depth.
+  - Masked-out pixels, the sky and photos the dataset already holds out give no points. The cloud is merged on a
+    voxel grid that grows until it fits the cap (1 M by default). The sparse cloud stays as `points3d_sparse.ply`, and `dense.json` says
+    how the cloud was made.
+  - Memory is bounded. The depth maps are held in at most 768 MB. COLMAP's PatchMatch and fusion caches get a
+    quarter of RAM instead of their 32 GB default, and they run under the mapper's memory guard.
+  - It never stops preparation. When no method can run, the step is skipped with the reason.
+  - A splatprep solve makes the dense points itself, on the Mac or on the worker where the photos already are.
+    Object Capture, LiDAR captures and COLMAP / Nerfstudio imports get them afterwards from splatprep's new
+    `task: dense`.
+  - Worker: capability `dense`, `/v1/info` → `"dense"`, and a GPU lease for the `dense` stage. The Linux app has a
+    *Dense points* switch too. `python -m splatprep dense --dataset D` and `SplatStudio --prepare … --dense` run it
+    from the shell.
+  - Measured on this Mac: 360 LiDAR photos fused to 248 k points in 7 s; 927 video frames with predicted depth gave
+    690 k points in 133 s, at a 2.6 GB peak. Training on the LiDAR capture (balanced preset, 7,000 steps, one run,
+    52 held-out photos) gave 21.37 dB from the dense points against 21.19 dB from the sparse ones. That gap is small
+    enough to be noise, so it stays off by default until longer runs and the benchmark set show a clear gain.
 - **SplatWork for Linux 1.7.15 — big training jobs no longer wait for ever:** since 1.7.8 a GPU only took a training
   job whose memory estimate fitted, and the estimate counted every photo as GPU memory. A 2-block run (5 M splats,
   Max image size 3600, 431 photos of 4032×3024) was estimated at over 20 GB, so it sat "queued" next to an idle

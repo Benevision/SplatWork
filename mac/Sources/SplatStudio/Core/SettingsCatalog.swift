@@ -272,6 +272,22 @@ enum SettingsCatalog {
               summary: "Uses iPhone/headset poses as a starting point and polishes them with SfM.",
               detail: "ARKit tracks tilt well (gravity) but its compass heading drifts — about 1° over a room scan, which at 1600 px is a 20-pixel disagreement between views of the same wall, so training blurs fine detail. Refinement keeps the capture's poses, per-frame lens values and scale, matches frames that look at the same place (revisits are what correct drift), builds 3D points from the capture poses and adjusts only the camera poses. On a 649-frame bedroom scan: 3.6 min instead of 28 for a full re-solve, all frames kept, +2.1 dB held-out PSNR (a full re-solve gave +2.5 dB). Runs on the Linux worker when one is in use. If it can't run (no Models pack, worker offline) or its corrections look implausible, the capture poses are used as recorded.",
               defaultValue: "On"),
+        .init(id: "sfm.densePoints", group: .cameras, title: "Dense points",
+              summary: "Builds a dense point cloud after the camera solve, so training starts from surfaces instead of the sparse solve points.",
+              detail: "The camera solve leaves a few thousand to a few hundred thousand points, mostly on textured corners; training has to grow everything else from them. With this on, a dense reconstruction runs between solving and training and its points replace the sparse ones (the sparse cloud is kept as points3d_sparse.ply). How: on a Linux worker with an NVIDIA GPU, COLMAP's multi-view stereo (PatchMatch depth per photo against its neighbours, then fusion of the depths that agree) — untested on real hardware so far. Elsewhere, depth maps are fused: the capture's own LiDAR depth when it has some, else depth predicted per photo (Depth Anything V2 Small, Models pack or worker) and scaled to the solve's points. Either way a point is kept only where at least three photos agree on it, masked-out pixels and the sky give no points, photos already held out (captures, imports) aren't used, and the cloud is merged on a voxel grid down to the point cap. Typical cost: seconds for a LiDAR capture, about 2 minutes for 900 photos with predicted depth on an M4 Pro, longer for multi-view stereo. If it can't run here, preparation goes on with the sparse points and says why. Turning it on or off redoes the camera solve (Redo from Cameras).",
+              defaultValue: "Off", advanced: false),
+        .init(id: "sfm.denseMethod", group: .cameras, title: "Dense method",
+              summary: "Automatic, multi-view stereo, or fusing depth maps.",
+              detail: "Automatic uses COLMAP multi-view stereo where COLMAP was built with CUDA (an NVIDIA worker) and fuses depth maps everywhere else. Multi-view stereo (untested on real hardware so far) usually gives the most accurate surfaces on textured scenes but needs CUDA; asked for where there is none, depth maps are fused instead. Fuse depth maps uses LiDAR / stereo depth when most photos have it, else predicted depth — fast, and fills plain walls that stereo matching can't, but predicted depth is less exact (agreement between three photos removes most of its errors).",
+              defaultValue: "Automatic"),
+        .init(id: "sfm.denseMaxPoints", group: .cameras, title: "Dense point cap",
+              summary: "Most points the dense cloud keeps.",
+              detail: "Points are merged on a voxel grid; the cell grows until the cloud fits under the cap, so memory stays bounded while fusing and the cloud is spread evenly instead of piling up where many photos overlap. Training then grows and prunes from there. More points start training closer to the final detail but use more memory at the start.",
+              defaultValue: "1 million", range: "250,000–4 million"),
+        .init(id: "sfm.denseKeepSparse", group: .cameras, title: "Keep the sparse points too",
+              summary: "Adds the dense points to the solve's sparse points instead of replacing them.",
+              detail: "Off: the dense cloud replaces the sparse one. On: both are used (merged under the same cap) — the sparse points cover distant or thin structures the dense step may have filtered out.",
+              defaultValue: "Off"),
     ]
 
     // MARK: Masking

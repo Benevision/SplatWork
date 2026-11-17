@@ -23,6 +23,8 @@ SFM = ["pairs", "features", "matching", "verification", "mapping", "alignment", 
 
 def test_which_stages_need_the_gpu():
     assert [s for s in SFM if gpulease.needs_gpu("sfm", s)] == ["pairs", "features", "matching"]
+    assert gpulease.needs_gpu("sfm", "dense") and gpulease.needs_gpu("dense", "dense")   # PatchMatch / depth model
+    assert gpulease.need_mb("sfm", "dense") == 6000
     assert gpulease.needs_gpu("masks", "masks") and gpulease.needs_gpu("maskpreview", "anything")
     assert not gpulease.needs_gpu("frames", "extracting frames")             # plain video decoding: CPU
     assert not gpulease.needs_gpu("frames", "restoring home video")         # VHS: CPU
