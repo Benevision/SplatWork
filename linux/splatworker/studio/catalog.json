@@ -1081,6 +1081,17 @@
    "advanced": true
   },
   {
+   "id": "train.opacityBinaryReg",
+   "group": "Training — losses & regularisation",
+   "title": "Solid-or-gone splats",
+   "summary": "Late in training, pushes half-transparent splats to become solid or disappear. This Mac's trainer only.",
+   "detail": "Surfaces built from stacks of see-through splats only add up to the right colour from the direction the photos were taken. For the last 30 % of training this adds a penalty that is largest for half-transparent splats, and splats that end up invisible are removed from the result. Experimental and off by default: at 0.05 on a 431-photo van capture the held-out scores were unchanged, with 38 % fewer splats and far fewer nearly transparent ones. Values of 1 and above delete most of the scene. Ignored by Linux and Windows workers. 0 turns it off.",
+   "defaultValue": "0",
+   "range": "0–0.1",
+   "effects": "",
+   "advanced": true
+  },
+  {
    "id": "train.anisotropyReg",
    "group": "Training — losses & regularisation",
    "title": "Needle-splat penalty",

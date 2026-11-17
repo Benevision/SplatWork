@@ -1,6 +1,6 @@
 # SplatWork — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 125 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 126 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
@@ -12,7 +12,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 125 sett
 - [Training — basics](#training--basics) — 9 settings
 - [Training — densification](#training--densification) — 13 settings
 - [Training — learning rates](#training--learning-rates) — 5 settings
-- [Training — losses & regularisation](#training--losses--regularisation) — 20 settings
+- [Training — losses & regularisation](#training--losses--regularisation) — 21 settings
 - [Compute & networking](#compute--networking) — 10 settings
 - [Export](#export) — 5 settings
 
@@ -1542,6 +1542,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 125 sett
 | [Flat surfaces (depth normals)](#flat-surfaces-depth-normals) | 0.05 | 0–0.5 | Advanced |
 | [Predicted depth](#predicted-depth) | Auto | – | Advanced |
 | [Flat splats](#flat-splats) | 0 | 0–0.1 | Advanced |
+| [Solid-or-gone splats](#solid-or-gone-splats) | 0 | 0–0.1 | Advanced |
 | [Needle-splat penalty](#needle-splat-penalty) | 0.1 | 0–1 | Advanced |
 | [Big-splat penalty](#big-splat-penalty) | 10 | 0–30 | Advanced |
 | [Needle ratio limit](#needle-ratio-limit) | 10 | 2–50 | Advanced |
@@ -1696,6 +1697,25 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 125 sett
 **When to change it**
 
 - Too high and fine 3D detail (hair, foliage) loses volume.
+
+### Solid-or-gone splats
+
+> Late in training, pushes half-transparent splats to become solid or disappear. This Mac's trainer only.
+
+| | |
+|---|---|
+| **Default** | 0 |
+| **Range** | 0–0.1 |
+| **Mode** | Advanced |
+| **ID** | `train.opacityBinaryReg` |
+
+**How it works.** Surfaces built from stacks of see-through splats only add up to the right colour from the direction the photos were taken.
+
+- For the last 30 % of training this adds a penalty that is largest for half-transparent splats, and splats that end up invisible are removed from the result.
+- Experimental and off by default: at 0.05 on a 431-photo van capture the held-out scores were unchanged, with 38 % fewer splats and far fewer nearly transparent ones.
+- Values of 1 and above delete most of the scene.
+- Ignored by Linux and Windows workers.
+- 0 turns it off.
 
 ### Needle-splat penalty
 

@@ -946,13 +946,16 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
                                 device float* gradStats [[buffer(14)]],  // per gaussian: accum, count, maxRadius
                                 constant float4& reg [[buffer(15)]],     // x: opacityReg/N, y: scaleReg/(3N), z: anisotropyReg/N, w: max axis ratio
                                 constant float2& big [[buffer(16)]],     // x: bigSplatReg/N, y: largest allowed tan(half-angle)
-                                constant float& flatReg [[buffer(17)]],  // flatnessReg/N
+                                constant float4& reg2 [[buffer(17)]],    // x: flatnessReg/N, y: opacityBinaryReg/N (0 before its start)
                                 uint i [[thread_position_in_grid]]) {
     if (i >= cam.count) return;
     float o = 1.0f / (1.0f + exp(-opLogit[i]));
     float3 s = exp(float3(logScale[i*3], logScale[i*3+1], logScale[i*3+2]));
     // Regulariser gradients apply to every gaussian.
     float gop = reg.x * o * (1.0f - o);
+    float flatReg = reg2.x;
+    // Solid-or-gone: penalty o(1 − o), largest at half-transparent; d/dlogit = (1 − 2o)·o(1 − o).
+    gop += reg2.y * (1.0f - 2.0f * o) * o * (1.0f - o);
     float3 gls = reg.y * s;
     // Needle penalty: r = longest / MIDDLE axis. Flat discs (two long axes, one tiny) are the normal, desirable
     // shape for surfaces, so the shortest axis must not count — using longest / shortest squashed every disc

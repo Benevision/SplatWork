@@ -157,6 +157,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `normalWeight` | float | 0.05 | depth-normal consistency: normals of the rendered depth (central differences) vs normals of the photo's depth map, loss (1−c)/2 + √((1−c)/2), summed over valid opaque pixels / pixel count |
 | `normalStart` | int | 1000 | step at which the normal loss starts |
 | `flatnessReg` | float | 0 | per-splat penalty on the smallest axis's share s_min² / Σ s² (flat discs) |
+| `opacityBinaryReg` | float | 0 | **Mac Metal trainer only** (workers ignore it): penalty mean o·(1 − o) on splat opacity from step `opacityBinaryFrom` × iterations (default 0.7); splats at or below `pruneOpacity` are dropped from the result |
 | `depthPriors` | string | `"auto"` | Linux worker: photos without sensor depth get a monocular depth map (Depth Anything V2 Small) fitted to the dataset's points, for the normal loss. `auto` = when no training photo has depth and `normalWeight` > 0; `on`; `off` |
 | `monoDepthWeight` | float | 0 | depth-loss weight for those predicted maps (0 = normals only) |
 | `anisotropyMaxRatio` | float | 10 | axis ratio above which the needle penalty applies |

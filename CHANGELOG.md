@@ -6,6 +6,15 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Sharper splats from the Adaptive strategy on the Mac, most of all on close-range captures.** While it was
+  adding splats, training also deleted every splat that had looked wider than a tenth of a photo, which on a
+  close-up capture is every surface a camera stood near; it also reset opacity on the last step of that phase,
+  and read the dark picture right after a reset as a colour-correction fault. All three are fixed (the Linux and
+  Windows trainers never did this). On a 431-photo van capture, photos held out of training score 22.2 dB (was
+  20.0), and a whole 40° sector of held-out cameras 17.8 dB (was 15.0); a 649-photo bedroom gains 0.9 and 1.3 dB.
+- **Solid-or-gone splats** (Mac, Advanced → Training, off by default, experimental): late in training,
+  half-transparent splats are pushed to become solid or disappear. Same measured quality on the van capture with
+  38 % fewer splats.
 - **Dense points (Mac; SplatWork for Linux, next release):** a new option under New Project → Camera solving, off by
   default. After the camera solve it builds a dense point cloud, and training starts from it instead of the sparse
   solve points. Like Spirula Studio's dense reconstruction, it keeps only points that several photos agree on, but it

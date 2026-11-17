@@ -1034,8 +1034,9 @@ final class MetalTrainer: @unchecked Sendable {
         enc.setBytes(&reg, length: 16, index: 15)
         var big = SIMD2<Float>(config.bigSplatReg / Float(max(n, 1)), max(config.bigSplatMaxAngle, 0.01))
         enc.setBytes(&big, length: 8, index: 16)
-        var flat = config.flatnessReg / Float(max(n, 1))
-        enc.setBytes(&flat, length: 4, index: 17)
+        let binaryOn = config.opacityBinaryReg > 0 && Float(step) >= config.opacityBinaryFrom * Float(config.iterations)
+        var reg2 = SIMD4<Float>(config.flatnessReg, binaryOn ? config.opacityBinaryReg : 0, 0, 0) / Float(max(n, 1))
+        enc.setBytes(&reg2, length: 16, index: 17)
         enc.dispatch1D(ctx.pipeline("preprocess_backward"), count: n)
         enc.memoryBarrier(scope: .buffers)
         split("5 preprocess backward")
@@ -1710,9 +1711,6 @@ final class MetalTrainer: @unchecked Sendable {
         }
     }
 
-    private func resetOpacity() {
-        let op = ptr(params[3])
-        let cap = GaussianCloud.invSigmoid(0.01)
     /// Step of the last opacity reset. For a while after one the splats are nearly transparent by design, so the
     /// held-out score and the colour-correction safeguard (which reads a dark render as "the correction has taken
     /// over") are not meaningful: both wait `opacityRecovery` steps.
@@ -1720,8 +1718,11 @@ final class MetalTrainer: @unchecked Sendable {
     static let opacityRecovery = 500
     private var recoveringFromReset: Bool { step - lastOpacityReset < Self.opacityRecovery }
 
-        for i in 0..<n { op[i] = min(op[i], cap) }
+    private func resetOpacity() {
         lastOpacityReset = step
+        let op = ptr(params[3])
+        let cap = GaussianCloud.invSigmoid(0.01)
+        for i in 0..<n { op[i] = min(op[i], cap) }
         let (ra, rb) = momentRowBytes(3)
         memset(m1[3].contents(), 0, n * ra); memset(m2[3].contents(), 0, n * rb)
     }
@@ -1774,7 +1775,7 @@ final class MetalTrainer: @unchecked Sendable {
                          config.optimizerPrecision, Double(peakAllocatedBytes) / 1_048_576, n, capacity, b.total, b.moments), stderr)
         }
         var result = snapshot()
-        if config.strategy == .mcmc {
+        if config.strategy == .mcmc || config.opacityBinaryReg > 0 {
             // Drop gaussians that ended up dead.
             let sky = result.skybox
             result = result.filtered((0..<result.count).map { result.opacity($0) > config.pruneOpacity })
