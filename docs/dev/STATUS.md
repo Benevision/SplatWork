@@ -66,18 +66,17 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
 
 ## Next work
 
-The longer plan to a public release (hardening, parity, distribution, beta) is in [ROADMAP.md](ROADMAP.md).
+The plan is [ROADMAP.md](ROADMAP.md) (rewritten 2026-11-17 after a full review): rules for every change, milestones
+in order, and a register of the recurring issues. In short:
 
-1. **Hardening** (ROADMAP phase 1): the open security review findings, parser fuzzing, Mac tests, Copy diagnostics,
-   commercially licensed default models.
-2. **Real-GPU checks of the Vulkan trainer:** *Compare trainers* on the RTX 4080, a job moving from the Radeon 610M
-   to the RTX 4080, the RX 6700 XT (or a Steam Deck) on SteamOS; then GPU densification — see
-   [GPU_SUPPORT.md](GPU_SUPPORT.md).
-3. **Linux parity with the Mac:** the Projects list with stage checkpoints and resume, drone mode and the photo
-   switches, Show Live View, block Retry / Leave Out / Pause, the new preparation screen and Upload size.
-4. **Windows:** a first test on a real Windows PC with an NVIDIA GPU ([WINDOWS.md](WINDOWS.md)); code signing.
-5. **Steam Frame capture:** recording with the stereo cameras and the IR cameras together, for room meshing that
-   makes splats more accurate.
+0. **Measure:** a quality and speed benchmark with committed baselines, and a divergence guard in every trainer.
+1. **Stop the known quality losses:** the MCMC collapse above about 1 M splats, fog in exports, presets, resume
+   state, remote / local solve differences, pose-refinement outliers, colour correction.
+2. **One trainer specification** across Metal, gsplat and Vulkan, with tests; a Mac test target.
+3. **Quality from current research**, 4. **Speed**, 5. **Networked processing** (block split and merge v2,
+   transfers, transport security), 6. **Easy to use**, 7. **Hardening**, 8. **Distribution and beta**.
+
+New platforms, sources and trainers are frozen until milestones 0–2 are done.
 
 ## Releasing
 
