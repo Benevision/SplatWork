@@ -279,6 +279,20 @@ and long-axis split all off, MCMC collapsed **earlier** — 16.0 dB at step 4,00
 together. The fault is in the MCMC core on this scene (position noise, relocation, opacity regulariser, or splats
 leaving the region; scene extent 5.1). Tests (b) and (c) are next; (d) is ruled out as the main cause.
 
+**Q1 test (b), 2026-11-17 (gsplat trainer, RTX 4080, block 1 settings, cap 3.1 M, 12,000 steps; training-view
+PSNR from the job log):** position noise is the cause.
+
+| `noiseLR` | Job | At 5,500 | On reaching the cap | At 12,000 |
+|---|---|---|---|---|
+| 5e5 (default) | `j5d00d5c21b4` | 19.5 at 3,700, then falling | 11.7 at 9,400 | cancelled |
+| 5e4 | `jbd57a121036` | 19.8 | 19.9 at 10,500 | 20.4 |
+| 0 | `jd8bc12e5ce8` | 20.2 at 5,700 | 20.9 at 9,700 | 21.5 |
+
+No default has changed. Next: find why the default noise diverges on this scene and not at a 1 M cap (the noise
+is scaled by each splat's covariance and by low opacity, so large faint splats move furthest), then fix the form
+of the noise (for example a cap on the step relative to the splat's size or the scene extent) in all three
+trainers and measure it on the benchmark. Test (c) is needed only if a noise fix leaves splats outside the region.
+
 ## 6. Research to adopt, and when
 
 | Area | Adopt | Milestone | Notes |
