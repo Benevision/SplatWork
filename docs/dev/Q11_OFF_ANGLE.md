@@ -186,6 +186,21 @@ are one layer at the LiDAR depth and not a see-through stack that only blends to
 from 0.5. The code is removed (it reached `main` for one commit, 5b13da1, off by default, when another session's
 commit picked up the working tree).
 
+### How much of the low-view gap is missing coverage
+
+`--thin 2` keeps only every other camera of the band held out and returns the rest to training. The same 33 low
+views, van, current trainer:
+
+| training set | 33 low views PSNR | SSIM | normal PSNR |
+|---|---:|---:|---:|
+| all 65 low cameras held out | 16.74 | 0.5733 | 21.78 |
+| the other 32 low cameras train | 20.22 | 0.6512 | 22.33 |
+
+Photos from the same height recover 3.5 dB of the 5.6 dB gap to ordinary held-out photos; about 2 dB remains.
+Most of the smear from below is therefore surfaces and angles no training photo shows, which a trainer change
+cannot invent: the remedy is capture (a low pass and a high pass) and telling the user when a height band is
+missing. The roadmap fixes were tested against the part that coverage explains, which is why none registered.
+
 ## Where Q11 stands
 
 Better, not fixed. Sector views on the van are still 4.4 dB below ordinary held-out views and still show streaks

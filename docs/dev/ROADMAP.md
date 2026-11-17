@@ -114,6 +114,9 @@ Each item is a known defect with evidence; fix, measure, tick.
       *2026-11-18: views from below the capture still smear with the repaired trainer. New score
       `novel_views.py sector --by low`: van low views 16.76 dB against 22.07 ordinary held-out; needle limit,
       SH degree 1, depth weight 0.5, solid-or-gone and a depth-spread term (removed) all within noise or worse.*
+      *Coverage test (`--thin 2`): with half the low cameras back in training the other half score 20.22 dB
+      (from 16.74), so about two thirds of the gap is missing coverage, not the trainer. Next: capture guidance
+      (low and high passes) and a coverage warning.*
 - [ ] **Fog in exports** (Q2): run the invisible-splat census (Auto clean) automatically at the end of training
       and after a block merge; the only prune today is opacity above 0.005.
 - [ ] **Presets leave too little refinement** (Q3): `densifyStop` stored as a fraction of the steps (about 0.5) in

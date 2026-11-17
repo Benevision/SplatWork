@@ -214,10 +214,16 @@ def sector_main(argv):
     ap.add_argument("--from", dest="source", help="name of an earlier run in --out")
     ap.add_argument("--by", default="auto", choices=["auto", "position", "direction", "low", "high"],
                     help="low / high: hold out the lowest / highest --fraction of the cameras instead of a sector")
+    ap.add_argument("--thin", type=int, default=1, help="hold out only every Nth camera of the sector / height band "
+                    "(the rest train): how much of the gap is missing coverage")
     ap.add_argument("--max-size", type=int, default=1600, help="longest side of the scored renders")
     a = ap.parse_args(argv)
     ds = json.loads((a.dataset / "dataset.json").read_text())
     sector, how = pick_sector(ds, a.width, a.fraction, a.by)
+    if a.thin > 1:   # coverage test: only every Nth picked camera stays held out, the rest train
+        keep = set(sorted(sector)[::a.thin])
+        how += f"; 1 in {a.thin} held out ({len(keep)}), the other {len(sector) - len(keep)} train"
+        sector = keep
     dirs = write_split(a.dataset, a.out, ds, sector)
     cfg = {"strategy": a.strategy}
     if a.config:
