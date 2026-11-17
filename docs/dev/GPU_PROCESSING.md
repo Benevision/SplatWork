@@ -22,6 +22,34 @@ So the CPU baseline for everything below is COLMAP SIFT, not OpenCV SIFT. SuperP
 here (no PyTorch on this Mac); the Deck's own runs took over 2 h before they were stopped. A Deck is slower than this
 Mac per core, so expect several minutes, not seconds, for a few hundred photos even with SIFT.
 
+## Stage 1 status (1.7.14, approved 2026-11-17): the Vulkan matcher
+
+`splatwork-vk-match` (built and shipped with `splatwork-vk-train`; `shaders/match_nn.comp`, `src/match.{h,cpp}`):
+brute-force nearest neighbours of 128-byte SIFT descriptors both ways on any Vulkan GPU, then Lowe's ratio test
+(0.8) and a mutual check on the host. Descriptors are bytes, so `|a|² + |b|² − 2·a·b` in float32 is **exact** (every
+partial sum < 2²⁴): the GPU gives the same integers as the CPU in any order, and the matches are identical, not
+approximately equal. One invocation per query descriptor, the other image in 32-descriptor tiles in shared memory,
+all pairs of a run in one submission.
+
+- `splatwork-vk-match bench` — synthetic SIFT-like descriptors (scene points seen by neighbouring images + noise +
+  40 % distractors), sequential pairs; GPU ms per pair, and an exact CPU reference on a few pairs (identical check).
+  Its CPU figure is a plain loop, not a SIMD-optimised matcher, so the real CPU baseline comes from:
+- `match_bench.py run PHOTOS` (installed as `/app/share/splatwork/match_bench.py`, run with the processing runtime's
+  Python, which has OpenCV) — OpenCV SIFT on real photos, OpenCV `BFMatcher` (k = 2, ratio, mutual) on the CPU, then
+  `splatwork-vk-match match` on the GPU, and a pair-by-pair comparison.
+
+Measured so far (correctness only; lavapipe is a CPU emulation, so its times say nothing about GPUs):
+
+| Check | Result |
+|---|---|
+| 30 room photos, 4,096 SIFT keypoints, 135 sequential pairs: Vulkan (lavapipe) vs OpenCV `BFMatcher` | **identical matches in 135 of 135 pairs**, 414 matches per pair |
+| Synthetic, 16 images × 4,096 descriptors, 54 pairs: GPU vs exact CPU reference | identical (indices, distances, matches) |
+| OpenCV `BFMatcher` on this Mac (Apple M-series, 12 threads) | 24 ms per pair |
+
+**Go / no-go (Steam Deck):** go to stage 2 if the Deck's Vulkan matcher is at least 20× faster per pair than OpenCV
+`BFMatcher` on the Deck's own CPU, with identical matches. The steps are in `AMD_TEST_STEAMOS.md` ("GPU matching
+benchmark"); the 610M and the 4080 run the same commands (`--device N` for the 610M on BensPC).
+
 ## Decision for the user
 
 **Recommendation: option 1, our own Vulkan compute for SIFT and matching**, built next to `splatwork-vk-train` as a

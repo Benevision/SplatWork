@@ -6,6 +6,12 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.14 — SIFT matching on any GPU (experimental benchmark):** `splatwork-vk-match`, built
+  into the Flatpak next to the Vulkan trainer, matches SIFT descriptors on any Vulkan GPU (brute-force nearest
+  neighbours, ratio test, mutual check). The distances are exact integers, so it gives exactly the same matches as
+  the CPU. On 135 pairs of real room photos they were identical to OpenCV's matcher. This is stage 1 of
+  docs/dev/GPU_PROCESSING.md: a benchmark for the Steam Deck (`bench`, and `match_bench.py run` on real photos)
+  decides whether camera solving moves to Vulkan. Nothing in the app uses it yet.
 - **SplatWork for Linux 1.7.13 — camera solving where PyTorch has no GPU:** on a Steam Deck, integrated or older AMD
   and Intel GPUs (anything PyTorch can't use), the default camera solve now uses COLMAP SIFT on the CPU instead of
   SuperPoint + LightGlue, which took hours there. In a CPU test on 184 frames, COLMAP SIFT took 105 s and placed 138

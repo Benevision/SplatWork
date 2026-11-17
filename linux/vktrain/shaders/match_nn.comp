@@ -1,0 +1,66 @@
+#version 460
+// Brute-force nearest neighbours of SIFT descriptors (docs/dev/GPU_PROCESSING.md, stage 1).
+//
+// Descriptors are 128 bytes (0…255) stored as floats, so dist² = |a|² + |b|² − 2·a·b is EXACT in float32: every
+// product is ≤ 255² and every partial sum ≤ 128·255² < 2²⁴ — the same integers on every GPU and the CPU reference,
+// in any summation order. One invocation per query descriptor of A; B is walked in tiles kept in shared memory.
+// Output per query: index of the nearest B descriptor, its dist² and the second-nearest dist² (the ratio test and
+// the mutual check are done on the host from both directions).
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer DescBuf { vec4 desc[]; };    // all images: 32 vec4 per descriptor
+layout(std430, binding = 1) readonly buffer NormBuf { float norm2[]; };  // |d|² per descriptor
+layout(std430, binding = 2) writeonly buffer OutBuf { uint result[]; };   // 3 per query: idx, d1, d2 (float bits)
+layout(push_constant) uniform PC {
+    uint aOffset;     // first descriptor of A (in descriptors)
+    uint nA;
+    uint bOffset;
+    uint nB;
+    uint outOffset;   // first result triple
+} pc;
+
+const uint TILE = 32u;
+shared vec4 tile[TILE * 32u];
+shared float tileNorm[TILE];
+
+void main() {
+    uint q = gl_GlobalInvocationID.x;
+    bool live = q < pc.nA;
+    vec4 a[32];
+    float na = 0.0;
+    if (live) {
+        uint base = (pc.aOffset + q) * 32u;
+        for (uint k = 0u; k < 32u; k++) a[k] = desc[base + k];
+        na = norm2[pc.aOffset + q];
+    }
+    float best = 3.0e38, second = 3.0e38;
+    uint bestIdx = 0xFFFFFFFFu;
+    for (uint t0 = 0u; t0 < pc.nB; t0 += TILE) {
+        uint count = min(TILE, pc.nB - t0);
+        // cooperative load: TILE descriptors × 32 vec4 by 64 invocations
+        for (uint e = gl_LocalInvocationID.x; e < count * 32u; e += 64u)
+            tile[e] = desc[(pc.bOffset + t0) * 32u + e];
+        if (gl_LocalInvocationID.x < count) tileNorm[gl_LocalInvocationID.x] = norm2[pc.bOffset + t0 + gl_LocalInvocationID.x];
+        barrier();
+        if (live) {
+            for (uint j = 0u; j < count; j++) {
+                float dp = 0.0;
+                for (uint k = 0u; k < 32u; k++) dp += dot(a[k], tile[j * 32u + k]);
+                float d = na + tileNorm[j] - 2.0 * dp;
+                if (d < best) {
+                    second = best;
+                    best = d;
+                    bestIdx = t0 + j;
+                } else if (d < second) {
+                    second = d;
+                }
+            }
+        }
+        barrier();
+    }
+    if (live) {
+        uint o = (pc.outOffset + q) * 3u;
+        result[o] = bestIdx;
+        result[o + 1u] = floatBitsToUint(best);
+        result[o + 2u] = floatBitsToUint(second);
+    }
+}

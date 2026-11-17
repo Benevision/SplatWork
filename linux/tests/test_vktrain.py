@@ -581,3 +581,40 @@ def test_gpu_speed_measurement(build_dir, tmp_path, monkeypatch):
     assert plan[0].speed == rec["stepsPerSecond"] and plan[0].relative == 1.0 and not plan[0].slow
     bad = gpuspeed.measure_all([{**dev, "index": 7, "name": "missing"}], tmp_path / "scene")
     assert list(bad.values())[0]["error"]
+
+
+# ------------------------------------------------- descriptor matching (GPU_PROCESSING.md, stage 1)
+
+def test_match_bench_is_exact(build_dir):
+    """splatwork-vk-match bench: synthetic SIFT-like descriptors, GPU nearest neighbours identical to the exact CPU
+    reference (indices, distances, matches)."""
+    r = subprocess.run([str(build_dir / "splatwork-vk-match"), "bench", "--keypoints", "512", "--images", "5",
+                        "--window", "2", "--threads", "2"], capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stdout + r.stderr
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    print(f"match bench: {res}")
+    assert res["type"] == "bench" and res["identical"] is True and res["checkedPairs"] == 4
+    assert 80 < res["matchesPerPair"] < 400                         # ~60 % shared points, ratio test 0.8
+
+
+def test_match_files_gpu_equals_cpu(build_dir, tmp_path):
+    """splatwork-vk-match match on descriptor files: the GPU and --cpu give the same matches, including an image
+    with no descriptors and one with a single descriptor (no second nearest)."""
+    np = pytest.importorskip("numpy")
+    rng = np.random.default_rng(3)
+    base = rng.integers(0, 120, (300, 128), dtype=np.uint8)
+    sets = {"a": base, "b": np.clip(base.astype(int) + rng.integers(-6, 7, base.shape), 0, 255).astype(np.uint8),
+            "c": rng.integers(0, 120, (200, 128), dtype=np.uint8), "empty": np.zeros((0, 128), np.uint8),
+            "one": base[:1].copy()}
+    for name, d in sets.items():
+        (tmp_path / f"{name}.sift").write_bytes(struct.pack("<I", len(d)) + d.tobytes())
+    (tmp_path / "pairs.txt").write_text("a b\nb c\na empty\none a\n")
+    out = {}
+    for mode in ([], ["--cpu", "--threads", "2"]):
+        r = subprocess.run([str(build_dir / "splatwork-vk-match"), "match", "--desc", str(tmp_path), "--pairs",
+                            str(tmp_path / "pairs.txt"), *mode], capture_output=True, text=True, timeout=300)
+        assert r.returncode == 0, r.stderr
+        out[bool(mode)] = [json.loads(x) for x in r.stdout.splitlines() if '"pair"' in x]
+    assert out[False] == out[True]
+    by = {(p["a"], p["b"]): p["matches"] for p in out[False]}
+    assert len(by[("a", "b")]) > 250 and by[("a", "empty")] == [] and by[("one", "a")] == [[0, 0]]

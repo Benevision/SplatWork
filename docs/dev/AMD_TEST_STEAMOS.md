@@ -93,6 +93,28 @@ Send back the last line of the GPU check (`SPLATWORK-GPU-CHECK {...}`): torch `h
 `gfx1030` (the override) and `alloc_1gb` / `matmul_fp32` passing mean ROCm works there. To go back to the CPU
 build: *Set Up GPU Runtime… → Advanced → CPU*.
 
+### GPU matching benchmark (1.7.14, docs/dev/GPU_PROCESSING.md stage 1)
+
+In Konsole on the Deck, after it has updated to SplatWork for Linux 1.7.14 (`flatpak update --user
+com.example.SplatWorker` if it hasn't yet). Nothing here needs the server's token or the network.
+
+1. The synthetic benchmark (about a minute):
+
+```bash
+flatpak run --command=splatwork-vk-match com.example.SplatWorker bench | tail -3
+```
+
+2. Real photos: the images of one of your SplatWork projects (list them with `ls ~/Documents/SplatWork`), OpenCV on
+   the CPU against the GPU (a few minutes):
+
+```bash
+flatpak run --command=sh com.example.SplatWorker -c '"$XDG_DATA_HOME"/splatworker/venv/bin/python /app/share/splatwork/match_bench.py run "$HOME/Documents/SplatWork/PROJECT/dataset/images" --images 30'
+```
+
+   (replace PROJECT with the project's folder name). Send back the last line of each: `{"type": "bench", …}` and
+   `{"type": "match-bench", …}` — GPU and CPU milliseconds per pair, the speed-up and whether the matches were
+   identical.
+
 ## 4. Training with the Vulkan trainer (experimental)
 
 SplatWork 1.7.0 and newer have a built-in Vulkan trainer: it is part of the app (nothing to download) and

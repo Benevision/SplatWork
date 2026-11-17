@@ -81,6 +81,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.14" date="2026-11-17">
+      <description>
+        <p>An experimental GPU matching benchmark for graphics cards PyTorch can't use.</p>
+      </description>
+    </release>
     <release version="1.7.13" date="2026-11-16">
       <description>
         <p>Faster camera solving where the GPU can't run the processing models.</p>
