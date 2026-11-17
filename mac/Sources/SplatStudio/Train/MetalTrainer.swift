@@ -1671,7 +1671,10 @@ final class MetalTrainer: @unchecked Sendable {
         for i in 0..<n {
             let o = 1 / (1 + exp(-op[i]))
             let maxS = exp(max(sc[i*3], max(sc[i*3+1], sc[i*3+2])))
-            let tooBig = step > config.opacityResetInterval && (gs[i*3+2] > 0.1 || maxS > 0.1 * sceneExtent)
+            // World size only, as gsplat's default strategy. A screen-size rule (wider than 10 % of a photo) was
+            // here too: on close-range captures it deleted the splats of every surface a camera stood near, at
+            // every densify step, so training PSNR fell for as long as densification ran (ROADMAP Q11).
+            let tooBig = step > config.opacityResetInterval && maxS > 0.1 * sceneExtent
             if o < config.pruneOpacity || tooBig { continue }
             let g = gs[i*3+1] > 0 ? gs[i*3] / gs[i*3+1] : 0
             let canGrow = src.count + (n - i) < budget
