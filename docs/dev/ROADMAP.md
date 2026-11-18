@@ -338,6 +338,17 @@ Fix candidates, to measure one at a time: (1) no growth while the faint share is
 (2) no noise for a splat no training camera sees; (3) a cap that follows what the scene needs rather than
 `maxGaussians` (the hybrid capped strategy of milestone 3). `noiseMaxSigma` is still to be removed.
 
+**Q1 candidate (1) measured, 2026-11-18: the growth pause slows the collapse and does not stop it.**
+`mcmcGrowthMaxFaint` 0.3, default noise, Linux 1.7.18 (which also removed `noiseMaxSigma`), job `j1c80070b164`:
+growth paused from step 8,000 at about 1.22 M splats; 19.3 dB at 6,500, 16.3 at 8,500, 15.6 at 9,000,
+12.3 at 13,100 with 1.28 M splats. The splats did not drift (median camera distance 0.21 at 9,000, faint share
+held near 30%), but the share under opacity 0.05 kept rising (76% at 6,500, 87% at 9,000) and the largest splats
+grew (99th percentile size 0.052 → 0.106). So the drift is a symptom, not the cause, and the collapse is not a
+matter of the count passing the cap either: it happens at 1.28 M. `mcmcGrowthMaxFaint` is to be removed with the
+next Linux change. Three fixes have now failed (noise limit, weaker noise, growth pause); the only stable
+configuration measured at this cap is `noiseLR` 0. Open: whether a 1 M cap with default noise is stable on gsplat
+too (it was on Vulkan, `j02233f519bc`), and how a full noise-off run scores on held-out views against Adaptive.
+
 No default has changed. Next: find why the default noise diverges on this scene and not at a 1 M cap (the noise
 is scaled by each splat's covariance and by low opacity, so large faint splats move furthest), then fix the form
 of the noise (for example a cap on the step relative to the splat's size or the scene extent) in all three
