@@ -81,6 +81,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7.17" date="2026-11-18">
+      <description>
+        <p>MCMC training logs splat statistics every 500 steps (a diagnostic for runs that fall apart).</p>
+      </description>
+    </release>
     <release version="1.7.16" date="2026-11-18">
       <description>
         <p>Dense points, and an experimental limit on MCMC noise.</p>

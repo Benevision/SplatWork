@@ -6,6 +6,10 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.17 — MCMC training logs splat statistics.** Every 500 steps the NVIDIA (gsplat) trainer
+  writes one line to the job log: how many splats are faint enough to receive noise, their sizes, how close they
+  are to a camera and how much screen they cover. It changes nothing about training; it is there to find why MCMC
+  falls apart at high splat counts (roadmap issue Q1, where the 1.7.16 noise limit was measured and did not help).
 - **SplatWork for Linux 1.7.16 — an experimental limit on MCMC noise (off by default).** MCMC training with a high
   splat limit fell apart on one capture (a van, 3.1 M splats per block: 19.5 dB falling to 11.7 dB). The cause is
   the position noise: with it off the same run stays at 18–21 dB. The noise step grows with the square of a

@@ -269,3 +269,14 @@ def test_capped_noise_limits_the_step_to_the_splats_own_size():
     params["scales"].fill_(float(np.log(1e-4)))                                      # tiny splats: below the limit, gsplat's form
     inject_capped_noise(torch, params, scaler=400.0, max_sigma=1.0)
     assert float(params["means"].norm(dim=1).mean()) < 1e-4 * 1e-4 * 400.0 * 3
+
+
+def test_splat_stats_line():
+    torch = pytest.importorskip("torch")
+    from splatworker.trainer import splat_stats
+    torch.manual_seed(0)
+    n = 500
+    params = {"means": torch.randn(n, 3), "scales": torch.log(torch.full((n, 3), 0.01)),
+              "quats": torch.randn(n, 4), "opacities": torch.cat([torch.full((n // 2,), -12.0), torch.full((n // 2,), 3.0)])}
+    line = splat_stats(torch, params, torch.zeros(4, 3), 2.0, {"flatten_ids": torch.zeros(5000), "radii": torch.ones(1, n, 2)})
+    assert "faint(<0.005)" in line and "tile hits 10.0 per splat" in line and "size p50 0.00500" in line

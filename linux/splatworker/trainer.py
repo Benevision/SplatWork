@@ -364,6 +364,37 @@ def _in_box(xyz, lo, hi):
 
 
 
+def splat_stats(torch, params, cam_pos, extent: float, info=None) -> str:
+    """One log line on what the splats are doing (roadmap Q1: MCMC runs that fall apart): how many are faint enough
+    for position noise, how large they are and how close to a camera, and how much screen the last render covered.
+    Sizes and distances are fractions of the scene extent. gsplat trainer only (a diagnostic)."""
+    with torch.no_grad():
+        n = int(params["means"].shape[0])
+        idx = torch.randint(0, n, (min(n, 200_000),), device=params["means"].device)
+        op = torch.sigmoid(params["opacities"].data[idx].float().flatten())
+        big = torch.exp(params["scales"].data[idx].float()).amax(dim=1) / extent
+        qs = torch.quantile(big, torch.tensor([0.5, 0.99], device=big.device))
+        d = torch.cdist(params["means"].data[idx].float(), cam_pos).amin(dim=1) / extent
+        dq = torch.quantile(d, torch.tensor([0.01, 0.5], device=d.device))
+        faint = op < 0.005
+        out = (f"splat stats: faint(<0.005) {100 * float(faint.float().mean()):.1f}% low(<0.05) "
+               f"{100 * float((op < 0.05).float().mean()):.1f}% | size p50 {float(qs[0]):.5f} p99 {float(qs[1]):.4f} "
+               f"max {float(big.max()):.3f} | >5% of extent {100 * float((big > 0.05).float().mean()):.2f}% "
+               f"(faint among them {100 * float((faint & (big > 0.05)).float().sum() / max(1, int((big > 0.05).sum()))):.0f}%)"
+               f" | camera distance p1 {float(dq[0]):.4f} p50 {float(dq[1]):.3f} within 2% "
+               f"{100 * float((d < 0.02).float().mean()):.2f}%")
+        try:
+            if info is not None and "flatten_ids" in info:
+                out += f" | tile hits {int(info['flatten_ids'].numel()) / max(1, n):.1f} per splat"
+            if info is not None and "radii" in info:
+                r = info["radii"].float()
+                r = r.amax(dim=-1) if r.dim() == 3 else r
+                out += f" radius p99 {float(torch.quantile(r.flatten()[:1_000_000], 0.99)):.0f}px max {float(r.max()):.0f}px"
+        except Exception:
+            pass
+        return out
+
+
 def inject_capped_noise(torch, params, scaler: float, max_sigma: float) -> None:
     """gsplat's MCMC position noise (pos += Σ · ε · gate · scaler) with a limit: along each of its own axes a splat
     moves at most ``max_sigma`` × its standard deviation on that axis per unit of ε. Without the limit the step
@@ -1060,6 +1091,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     gamma = (cfg.lrPositionFinal / cfg.lrPosition) ** (1.0 / cfg.iterations)
     pos_sched = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"], gamma=gamma)
 
+    stats_cams = None
     densify_stop = cfg.effective_densify_stop()
     if cfg.strategy == "mcmc":
         strategy = MCMCStrategy(cap_max=cfg.maxGaussians,
@@ -1505,6 +1537,14 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             if cur % 100 == 0 or cur == cfg.iterations:
                 log(f"step {cur}/{cfg.iterations} loss {loss_ema or 0:.4f} psnr {psnr_ema or 0:.2f} "
                     f"gaussians {ngs} sh {sh_degree}")
+            if cfg.strategy == "mcmc" and cur % 500 == 0:
+                try:
+                    if stats_cams is None:
+                        stats_cams = torch.tensor(np.array([np.asarray(v.camera.camera_to_world)[:3, 3]
+                                                            for v in train_views]), dtype=torch.float32, device=params["means"].device)
+                    log(f"step {cur} " + splat_stats(torch, params, stats_cams, max(scene_scale, 1e-6), info))
+                except Exception as e:      # a diagnostic must never stop training
+                    log(f"splat stats unavailable: {e}")
 
     final_n = export_ply(params, Path(out_path), up=scene_up)
     if resume_path is not None:
