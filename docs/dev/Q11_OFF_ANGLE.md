@@ -259,9 +259,31 @@ than at geometry.
 Both scenes agree: what is left after coverage is softness, not streaks or needles (6 % needles here), and a
 textured mesh shows that the photos contain that detail from these angles.
 
+### Splat budget on the low views (2026-11-18)
+
+Same thinned splits (half the low band trains, the other half is scored), Metal, adaptive.
+
+| scene | run | low views PSNR | SSIM | normal PSNR | SSIM | splats | minutes |
+|---|---|---:|---:|---:|---:|---:|---:|
+| van | Balanced (cap 800,000) | 20.22 | 0.6512 | 22.33 | 0.6684 | 800,000 | 13.7 |
+| van | Balanced, cap 2,000,000 | 20.33 | 0.6604 | 22.02 | 0.6672 | 815,515 | 9.1 |
+| van | High preset (30,000 steps, 1600 px, cap 1,500,000) | 20.23 | 0.6455 | 22.05 | 0.6586 | 708,727 | 21.4 |
+| bedroom | Balanced (cap 800,000) | 20.05 | 0.6322 | 20.90 | 0.6593 | 800,000 | 10.6 |
+| bedroom | Balanced, cap 2,000,000 | 19.99 | 0.6387 | 20.82 | 0.6623 | 2,000,000 | 14.9 |
+| bedroom | High preset | 20.02 | 0.6386 | 20.79 | 0.6629 | 1,499,999 | 30.5 |
+
+- No gain: every difference is inside the 0.3 dB run-to-run noise, on low views and on normal held-out views.
+- On the van the cap was not the limit: with room for 2,000,000 the trainer stopped at 815,515, and High ended
+  at 708,727. In the bedroom it filled 2,000,000 and scored the same.
+- High costs two to three times the training time for no held-out gain on either scene.
+- So the softness on unseen views is not a shortage of splats, steps or training resolution. With coverage the
+  low views are 2.0 dB (van) and 0.9 dB (bedroom) below ordinary held-out views, which are themselves soft
+  (22 and 21 dB) while training views reach 24 to 25 dB: the gap is fit-to-photos versus new views in general.
+
 ## Where Q11 stands
 
 Better, not fixed. Sector views on the van are still 4.4 dB below ordinary held-out views and still show streaks
-and smeared lettering. Not yet tried: a run
-with the 43 nearest cameras restored to see how much of the sector gap is missing coverage, the High preset, and
-the gsplat and Vulkan trainers on the same sector split.
+and smeared lettering. For views from a height the capture never visited, most of the gap is missing coverage
+(3.5 dB van, 2.2 dB bedroom); neighbouring-view consistency, a larger splat budget and the High preset do not
+move what is left. Not yet tried: the gsplat and Vulkan trainers on the same splits, a photo-only capture, and
+anything aimed at held-out views in general (pose and exposure refinement at test time, the Q7 bilateral grid).
