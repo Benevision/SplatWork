@@ -6,6 +6,11 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Mac: no colour correction when the exposure is locked, now including local colour correction.** For photos
+  that all share one exposure (SplatWork Capture) the Mac trainer already switched per-photo correction off, but
+  left the local colour grid running; the Linux trainers train such captures with no correction. The Mac now does
+  the same. Measured on two captures with a band of low photos held out (low views / ordinary held-out views):
+  van 20.22 / 22.33 → 20.62 / 22.73 dB, bedroom 20.05 / 20.90 → 20.67 / 21.58 dB.
 - **SplatWork for Linux 1.7.18 — an experimental MCMC growth pause (off by default); the 1.7.16 noise limit is
   removed.** The noise limit `noiseMaxSigma` was measured and did not help, so it is gone. The 1.7.17 statistics
   showed what the failing runs do: most splats go nearly transparent and drift away from the scene. The new setting

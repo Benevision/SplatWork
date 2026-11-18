@@ -334,7 +334,10 @@ Metal with each removed, same thinned low-view splits, one run each:
 - The grid is worth 0.55 to 0.65 dB on low views and 0.4 to 0.6 dB on normal held-out views on both scenes.
 - Resets are worth 0.4 to 0.5 dB on the van's low views and nothing in the bedroom, and they are what makes the
   van's needles (39.5 % → 22 %). `opacityResetInterval` 1,000,000 scores the same as 0.
-- Neither is changed here: each is a default change (one per commit, benchmark first), and the grid is Q7's
+- **Change 4 (2026-11-18, Metal only; brings it into line with the other two): the locked-exposure rule also
+  switches the colour grid off.** New default on the same splits: van 20.62 / 22.73 (SSIM 0.6654 / 0.7102),
+  bedroom 20.67 / 21.58 (0.6353 / 0.6598), against 20.22 / 22.33 and 20.05 / 20.90 before.
+- At the time of the table above neither was changed: each is a default change (one per commit, benchmark first), and the grid is Q7's
   decision. Proposed order: (1) the locked-exposure rule also switches the grid off on the Mac, which only brings
   Metal into line with the other two; (2) resets off in Metal's adaptive strategy, or the three trainers agree on
   one behaviour.

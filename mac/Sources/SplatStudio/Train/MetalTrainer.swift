@@ -372,10 +372,13 @@ final class MetalTrainer: @unchecked Sendable {
         mu = ctx.buffer(hw * 15 * 4, label: "mu"); dmaps = ctx.buffer(hw * 9 * 4, label: "dmaps")
         rawImg = ctx.buffer(hw * 12, label: "rawImg"); apGrad = ctx.buffer(64, label: "apGrad")
         skyDT = ctx.buffer(hw * 4, label: "skyDT")
-        if config.appearanceCorrection, Self.exposureLocked(views.map(\.camera)) {
+        if config.appearanceCorrection || config.bilateralGrid, Self.exposureLocked(views.map(\.camera)) {
             // Locked exposure (SplatWork Capture): nothing to correct, and the extra freedom costs held-out quality
             // (bedroom, 8k: 21.20 dB with correction, 22.21 dB without) and drifts colours too bright.
+            // The local colour grid is covered too, as in the gsplat and Vulkan trainers, which train these
+            // captures with no correction at all (ROADMAP Q7, Q11: +0.55 to +0.65 dB on views from a new height).
             config.appearanceCorrection = false
+            config.bilateralGrid = false
             appearanceAutoOff = true
         }
         // Local colour correction replaces the global per-photo one (it can express everything that does).
