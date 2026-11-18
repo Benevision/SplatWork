@@ -120,6 +120,9 @@ Each item is a known defect with evidence; fix, measure, tick.
       *(b) built as per-pixel neighbouring-view photo consistency: 20.22 → 20.35 / 20.32 / 20.47 dB at weights
       0.3 / 1 / 10, within noise, removed. Object Capture on the same photos: sharper than the splat on matte
       surfaces, broken on glossy bodywork, and its own SfM mis-placed 126 of 295 photos.*
+      *Second room (little glass): the same pattern. Coverage returns 2.2 of 2.8 dB, consistency 0.0 dB, and
+      the mesh keeps fine texture the splat blurs. What remains after coverage is softness; next test is the
+      splat budget on these views.*
 - [ ] **Fog in exports** (Q2): run the invisible-splat census (Auto clean) automatically at the end of training
       and after a block merge; the only prune today is opacity above 0.005.
 - [ ] **Presets leave too little refinement** (Q3): `densifyStop` stored as a fraction of the steps (about 0.5) in

@@ -239,6 +239,26 @@ the splat is soft from below (blurred, not streaked, on the interior views). Ref
 The splat's softness on those views points at detail (splat budget and resolution on rarely seen surfaces) more
 than at geometry.
 
+### The same three tests on a room with little glass (2026-11-18)
+
+`Capture 2026-11-17 17.22.00`: a bedroom, 445 LiDAR photos, lowest 67 cameras as the band, Balanced, adaptive, Metal.
+
+| run | 34 low views PSNR | SSIM | normal PSNR | SSIM | needles |
+|---|---:|---:|---:|---:|---:|
+| all 67 low cameras held out | 17.84 | 0.5636 | 20.67 | 0.6566 | 6.5% |
+| the other 33 low cameras train | 20.05 | 0.6322 | 20.90 | 0.6593 | 6.2% |
+| + neighbouring-view consistency, weight 1 | 20.04 | 0.6322 | 20.86 | 0.6588 | 6.0% |
+
+- Coverage again: 2.2 dB of the 2.8 dB gap returns with photos from that height, leaving 0.85 dB.
+- Neighbouring-view consistency: no change (0.01 dB).
+- Object Capture (359 photos, 22 minutes): 352 registered, 297 agree with the ARKit poses to a median of 1.4 cm,
+  so its camera solve mostly works here, unlike on the van. On the 34 low views it scores 16.5 dB / SSIM 0.519
+  against the splat's 20.2 dB / 0.675 (same caveat: alignment and unlit texture). By eye the mesh keeps fine
+  texture the splat blurs (rug pattern, concrete floor, cables) and bends straight edges and flat screens.
+
+Both scenes agree: what is left after coverage is softness, not streaks or needles (6 % needles here), and a
+textured mesh shows that the photos contain that detail from these angles.
+
 ## Where Q11 stands
 
 Better, not fixed. Sector views on the van are still 4.4 dB below ordinary held-out views and still show streaks
