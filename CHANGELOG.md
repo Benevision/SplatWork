@@ -6,6 +6,11 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Mac: the adaptive strategy no longer resets opacities.** Every 3,000 steps the Mac trainer made every splat
+  nearly transparent; the Linux trainers never did. On a vehicle capture the resets nearly doubled the thin
+  needle-shaped splats (22 % → 39 %) and cost 0.6 dB from new angles. Now off by default, with a switch in the
+  expert settings ("Opacity reset"). Measured (low views / ordinary held-out views): van 20.62 / 22.73 →
+  21.26 / 22.89 dB, bedroom 20.67 / 21.58 → 20.76 / 21.42 dB, 48-photo benchmark scene 28.88 → 30.20 dB.
 - **Mac: no colour correction when the exposure is locked, now including local colour correction.** For photos
   that all share one exposure (SplatWork Capture) the Mac trainer already switched per-photo correction off, but
   left the local colour grid running; the Linux trainers train such captures with no correction. The Mac now does

@@ -545,6 +545,7 @@ struct AdvancedTrainingSettings: View {
             if session.config.strategy == .adaptive {
                 SettingRow(id: "train.gradThreshold", showSummary: false) { NumberSlider(value: c.densifyGradThreshold.double, range: 0.00005...0.002, log: true, width: 90) }
                 SettingRow(id: "train.absGrad", showSummary: false) { Toggle("", isOn: c.absGrad).labelsHidden() }
+                SettingRow(id: "train.opacityResetOn", showSummary: false) { Toggle("", isOn: c.opacityReset).labelsHidden() }
                 SettingRow(id: "train.opacityReset", showSummary: false) { IntField(value: c.opacityResetInterval, range: 0...20_000, step: 500) }
             }
             SettingRow(id: "train.pruneOpacity", showSummary: false) { NumberSlider(value: c.pruneOpacity.double, range: 0.001...0.1, log: true, width: 90) }

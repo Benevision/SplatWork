@@ -18,6 +18,11 @@ struct TrainingConfig: Codable, Equatable {
     var densifyInterval = 100
     var densifyGradThreshold: Float = 0.0002
     var absGrad = false
+    /// Adaptive strategy: pull every opacity down to 0.01 every `opacityResetInterval` steps. Off, as in the gsplat
+    /// and Vulkan trainers (neither resets by default). On the van capture resets nearly doubled the needle
+    /// splats (22 % → 39 %) and cost 0.6 dB on views from a new height; no difference on the bedroom (ROADMAP Q11).
+    var opacityReset = false
+    /// The reset interval when `opacityReset` is on; also the step after which over-large splats are pruned.
     var opacityResetInterval = 3000
     var pruneOpacity: Float = 0.005
     var lrPosition: Float = 0.00016
@@ -130,7 +135,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.iterations, &iterations); d(.maxImageSize, &maxImageSize); d(.shDegree, &shDegree)
         d(.shDegreeInterval, &shDegreeInterval); d(.strategy, &strategy); d(.maxGaussians, &maxGaussians)
         d(.densifyStart, &densifyStart); d(.densifyStop, &densifyStop); d(.densifyInterval, &densifyInterval)
-        d(.densifyGradThreshold, &densifyGradThreshold); d(.absGrad, &absGrad); d(.opacityResetInterval, &opacityResetInterval)
+        d(.densifyGradThreshold, &densifyGradThreshold); d(.absGrad, &absGrad); d(.opacityResetInterval, &opacityResetInterval); d(.opacityReset, &opacityReset)
         d(.pruneOpacity, &pruneOpacity); d(.lrPosition, &lrPosition); d(.lrPositionFinal, &lrPositionFinal)
         d(.lrColor, &lrColor); d(.lrSHRest, &lrSHRest); d(.lrOpacity, &lrOpacity); d(.lrScale, &lrScale)
         d(.lrRotation, &lrRotation); d(.ssimWeight, &ssimWeight); d(.opacityReg, &opacityReg); d(.scaleReg, &scaleReg)

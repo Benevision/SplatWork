@@ -337,6 +337,14 @@ Metal with each removed, same thinned low-view splits, one run each:
 - **Change 4 (2026-11-18, Metal only; brings it into line with the other two): the locked-exposure rule also
   switches the colour grid off.** New default on the same splits: van 20.62 / 22.73 (SSIM 0.6654 / 0.7102),
   bedroom 20.67 / 21.58 (0.6353 / 0.6598), against 20.22 / 22.33 and 20.05 / 20.90 before.
+- **Change 5 (2026-11-18, Metal only; brings it into line with the other two): no opacity resets.** New switch
+  `opacityReset`, off by default; `opacityResetInterval` remains the interval when it is on and the step after
+  which over-large splats are pruned. On top of change 4: van 20.62 / 22.73 → 21.26 / 22.89 (SSIM 0.6654 /
+  0.7102 → 0.6805 / 0.7138, needles 39.0 % → 22.3 %); bedroom 20.67 / 21.58 → 20.76 / 21.42; the 48-photo
+  benchmark scene without depth (`benchmark-scene-v1`, 6 held-out photos) 28.88 → 30.20 dB (486,906 → 799,981
+  splats). Opacity decay in place of the reset (× 0.999 or × 0.99 per 100 steps while growing, Hahlbohm et al.)
+  scored the same as no reset (van 21.24 / 22.91 and 21.19 / 22.94, bedroom 20.73 / 21.36 and 20.79 / 21.45) and
+  was not added.
 - At the time of the table above neither was changed: each is a default change (one per commit, benchmark first), and the grid is Q7's
   decision. Proposed order: (1) the locked-exposure rule also switches the grid off on the Mac, which only brings
   Metal into line with the other two; (2) resets off in Metal's adaptive strategy, or the three trainers agree on

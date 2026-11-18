@@ -1407,7 +1407,7 @@ final class MetalTrainer: @unchecked Sendable {
     private func densifyIfNeeded() throws {
         let stop = config.densifyStop
         guard step >= config.densifyStart, step <= stop, step % max(config.densifyInterval, 1) == 0 else {
-            if config.strategy == .adaptive, config.opacityResetInterval > 0, step % config.opacityResetInterval == 0, step > 0, step < stop {
+            if config.strategy == .adaptive, config.opacityReset, config.opacityResetInterval > 0, step % config.opacityResetInterval == 0, step > 0, step < stop {
                 resetOpacity()
             }
             return
@@ -1418,7 +1418,7 @@ final class MetalTrainer: @unchecked Sendable {
             adaptiveDensify()
             // No reset on the last densify step (gsplat's default strategy stops before it too): with the presets'
             // stop at 80 % of the run, a reset there left a fifth of the run to rebuild every opacity from 0.01.
-            if config.opacityResetInterval > 0 && step % config.opacityResetInterval == 0 && step < stop { resetOpacity() }
+            if config.opacityReset && config.opacityResetInterval > 0 && step % config.opacityResetInterval == 0 && step < stop { resetOpacity() }
         }
         // Block training no longer kills gaussians that leave the block: the block's cameras also see
         // neighbouring blocks and background, and deleting those splats every pass made training
