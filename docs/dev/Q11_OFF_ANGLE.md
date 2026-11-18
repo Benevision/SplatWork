@@ -341,8 +341,8 @@ Metal with each removed, same thinned low-view splits, one run each:
 
 ## Research review (2026-11-18)
 
-Seventeen documents supplied by the user were read against the measurements above (16 papers and surveys, and
-three proceedings volumes of 100 papers, of which five were relevant). Numbers are the papers' own and were not
+Sixteen documents supplied by the user were read against the measurements above (13 papers and surveys, and
+three proceedings volumes of 100 papers, of which five were read). Numbers are the papers' own and were not
 reproduced. Most of the set is feed-forward prediction, compression, dynamic scenes or surface extraction and
 does not bear on Q11. What does, in the order worth testing:
 

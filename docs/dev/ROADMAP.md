@@ -133,7 +133,7 @@ Each item is a known defect with evidence; fix, measure, tick.
       locked-exposure captures (the other two switch correction off). Metal with both off matches Vulkan: van
       low views 20.22 → 21.24 (Vulkan 21.21), needles 39.5 % → 22.1 %; bedroom 20.05 → 20.68 (Vulkan 20.82).
       Next, one default per commit with the benchmark: grid off when exposure is locked on the Mac, then resets.
-      Research review of 17 supplied documents: ranked tests in Q11_OFF_ANGLE.md.*
+      Research review of 16 supplied documents: ranked tests in Q11_OFF_ANGLE.md.*
 - [ ] **Fog in exports** (Q2): run the invisible-splat census (Auto clean) automatically at the end of training
       and after a block merge; the only prune today is opacity above 0.005.
 - [ ] **Presets leave too little refinement** (Q3): `densifyStop` stored as a fraction of the steps (about 0.5) in
