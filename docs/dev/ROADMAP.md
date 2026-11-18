@@ -126,6 +126,9 @@ Each item is a known defect with evidence; fix, measure, tick.
       *Splat budget: no gain. Cap 2,000,000 and the High preset score within 0.15 dB of Balanced on the low
       views of both scenes (van 20.22 → 20.33 / 20.23, bedroom 20.05 → 19.99 / 20.02); the van does not even
       use the extra budget (815,515 splats). What is left is the general gap between training and held-out views.*
+      *Other trainers, same split: the softness is in all three. Metal is behind: van low views Metal 20.22,
+      gsplat 19.85 (480,577 splats), Vulkan 21.21; bedroom 20.05 / 20.75 / 20.82. Next: find what Vulkan does
+      differently from Metal on the van (needles 23 % against 40 %).*
 - [ ] **Fog in exports** (Q2): run the invisible-splat census (Auto clean) automatically at the end of training
       and after a block merge; the only prune today is opacity above 0.005.
 - [ ] **Presets leave too little refinement** (Q3): `densifyStop` stored as a fraction of the steps (about 0.5) in

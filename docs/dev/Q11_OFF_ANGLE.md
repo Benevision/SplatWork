@@ -280,10 +280,34 @@ Same thinned splits (half the low band trains, the other half is scored), Metal,
   low views are 2.0 dB (van) and 0.9 dB (bedroom) below ordinary held-out views, which are themselves soft
   (22 and 21 dB) while training views reach 24 to 25 dB: the gap is fit-to-photos versus new views in general.
 
+### The same low-view split on the other two trainers (2026-11-18)
+
+Same training photos and held-out views, Balanced settings sent explicitly (15,000 steps, 1400 px, cap 800,000,
+growth stops at 12,000, adaptive). gsplat and Vulkan ran on the RTX 4080 (SplatWork for Linux 1.7.18); all
+splats were scored by the Mac renderer. One run each.
+
+| scene | trainer | low views PSNR | SSIM | normal PSNR | SSIM | splats | needles | minutes |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| van | Metal | 20.22 | 0.6512 | 22.33 | 0.6684 | 800,000 | 39.5% | 13.7 |
+| van | gsplat | 19.85 | 0.6542 | 22.15 | 0.7019 | 480,577 | 35.1% | 6.3 |
+| van | Vulkan | 21.21 | 0.6755 | 22.78 | 0.7156 | 808,111 | 22.8% | 18.3 |
+| bedroom | Metal | 20.05 | 0.6322 | 20.90 | 0.6593 | 800,000 | 6.2% | 10.6 |
+| bedroom | gsplat | 20.75 | 0.6361 | 21.59 | 0.6614 | 826,234 | 8.0% | 7.1 |
+| bedroom | Vulkan | 20.82 | 0.6377 | 21.51 | 0.6612 | 849,535 | 7.1% | 23.0 |
+
+- The low-view softness is in all three trainers: none comes within 1.5 dB of its own normal held-out score on
+  the van, and SSIM on the low views stays at 0.64 to 0.68 everywhere.
+- The Metal trainer is behind on three of four comparisons by more than noise: 1.0 dB behind Vulkan on the van
+  low views (and 0.03 to 0.05 SSIM behind both on normal views), 0.7 dB behind both in the bedroom. On the van
+  Vulkan also makes far fewer needles (23 % against 40 %).
+- gsplat stopped at 480,577 splats on the van, so the three trainers do not grow alike under one specification
+  (rule 5). The caps are also not exact on the PC trainers (808,111 to 849,535 against 800,000).
+
 ## Where Q11 stands
 
 Better, not fixed. Sector views on the van are still 4.4 dB below ordinary held-out views and still show streaks
 and smeared lettering. For views from a height the capture never visited, most of the gap is missing coverage
 (3.5 dB van, 2.2 dB bedroom); neighbouring-view consistency, a larger splat budget and the High preset do not
-move what is left. Not yet tried: the gsplat and Vulkan trainers on the same splits, a photo-only capture, and
+move what is left. The other two trainers show the same softness, but Metal is 0.7 to 1.0 dB behind them on
+these splits, which is the next thing to explain. Not yet tried: a photo-only capture, and
 anything aimed at held-out views in general (pose and exposure refinement at test time, the Q7 bilateral grid).
