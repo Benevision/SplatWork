@@ -303,11 +303,70 @@ splats were scored by the Mac renderer. One run each.
 - gsplat stopped at 480,577 splats on the van, so the three trainers do not grow alike under one specification
   (rule 5). The caps are also not exact on the PC trainers (808,111 to 849,535 against 800,000).
 
+### Why Metal was behind: two Mac-only behaviours (2026-11-18)
+
+Reading the Vulkan and Metal growth routines side by side: cloning, splitting and pruning follow the same rules.
+Two things differ.
+
+1. **Opacity reset.** Metal pulls every opacity down to 0.01 every 3,000 steps. Vulkan does not unless
+   `--opacity-reset` is given, and gsplat's default strategy never does (its reset test is a chained comparison
+   that is always false; noted in `linux/vktrain/src/trainer.cpp`).
+2. **Colour correction with locked exposure.** All three trainers switch per-photo colour correction off when
+   every photo has the same exposure (SplatWork Capture). On the Mac that rule covers `appearanceCorrection`
+   only: `bilateralGrid` is on by default on the Mac (off by default in the other two) and keeps running.
+
+Metal with each removed, same thinned low-view splits, one run each:
+
+| scene | run | low views PSNR | SSIM | normal PSNR | SSIM | needles |
+|---|---|---:|---:|---:|---:|---:|
+| van | Metal as shipped | 20.22 | 0.6512 | 22.33 | 0.6684 | 39.5% |
+| van | no resets (`opacityResetInterval` 0) | 20.61 | 0.6651 | 22.47 | 0.6811 | 22.6% |
+| van | grid off | 20.77 | 0.6663 | 22.73 | 0.7093 | 37.9% |
+| van | grid off, no resets | 21.24 | 0.6795 | 22.72 | 0.7148 | 22.1% |
+| van | Vulkan | 21.21 | 0.6755 | 22.78 | 0.7156 | 22.8% |
+| bedroom | Metal as shipped | 20.05 | 0.6322 | 20.90 | 0.6593 | 6.2% |
+| bedroom | no resets | 20.03 | 0.6295 | 20.83 | 0.6568 | 6.3% |
+| bedroom | grid off | 20.70 | 0.6339 | 21.51 | 0.6593 | 6.5% |
+| bedroom | grid off, no resets | 20.68 | 0.6302 | 21.37 | 0.6573 | 6.5% |
+| bedroom | Vulkan | 20.82 | 0.6377 | 21.51 | 0.6612 | 7.1% |
+
+- With both removed Metal matches Vulkan on both scenes (within 0.15 dB).
+- The grid is worth 0.55 to 0.65 dB on low views and 0.4 to 0.6 dB on normal held-out views on both scenes.
+- Resets are worth 0.4 to 0.5 dB on the van's low views and nothing in the bedroom, and they are what makes the
+  van's needles (39.5 % → 22 %). `opacityResetInterval` 1,000,000 scores the same as 0.
+- Neither is changed here: each is a default change (one per commit, benchmark first), and the grid is Q7's
+  decision. Proposed order: (1) the locked-exposure rule also switches the grid off on the Mac, which only brings
+  Metal into line with the other two; (2) resets off in Metal's adaptive strategy, or the three trainers agree on
+  one behaviour.
+
+## Research review (2026-11-18)
+
+Seventeen documents supplied by the user were read against the measurements above (16 papers and surveys, and
+three proceedings volumes of 100 papers, of which five were relevant). Numbers are the papers' own and were not
+reproduced. Most of the set is feed-forward prediction, compression, dynamic scenes or surface extraction and
+does not bear on Q11. What does, in the order worth testing:
+
+| # | Idea | Source | Paper's evidence | Cost | Fit to our measurements |
+|---|---|---|---|---|---|
+| 1 | Opacity decay (× 0.9995 every 50 steps while growing) in place of the reset | Hahlbohm et al., perspective-correct 3DGS; StopThePop | Their growth fails without it | One line per trainer | Resets make the van's needles; decay may keep the reset's clean-up without them |
+| 2 | Prune by contribution: drop splats whose largest α × transmittance over all training pixels is under 0.01 | RadSplat (Niemeyer et al.) | 26.14 → 26.17 dB with a third fewer splats | One counting pass; Auto clean already has the census | 15 to 26 % of our splats are under opacity 0.05 |
+| 3 | Several photos per step, gradients summed | MVGS (Du et al.) | 28.69 → 29.26 dB from this alone; up to 8× training time | Training-loop change | Aimed at the 2 to 3 dB between training and held-out views |
+| 4 | 3D size filter (no splat smaller than the training photos can resolve) | Mip-Splatting, via both surveys | Fixes artefacts when the view distance changes | Low; already roadmap section 6 | Low views are closer to the floor than any training photo |
+| 5 | Edge-aware photo term and edge-weighted normal loss | VA-GS (Li et al.) | +0.30 dB, LPIPS −0.040 on Mip-NeRF 360 for the whole method | Loss terms | Softness; their flattening penalty hurt novel views, so also measure ours off |
+| 6 | Uncertainty channel fitted after training | Galappaththige et al. | Correlation 0.37 with held-out error | One extra channel | Does not improve the splat; could drive the coverage warning |
+| 7 | Perspective-correct splat evaluation and sorted first-16 blending | Hahlbohm et al. | 24.62 → 24.81 dB; the gain is in motion and at close range | New rasterisers in three trainers and two viewers | Close-range, wide-angle captures are its case; largest job here |
+
+Not worth testing for Q11: feed-forward predictors (SplatWeaver, Uni3R, MeshSplat, SparSplat, VolSplat, MVSplat,
+G3Splat), compression (Niedermayr et al.), dynamic scenes (GS-Morph), the NeRF teacher in RadSplat. VA-GS's
+multi-view patch loss is the term already measured here with no gain. Chougule (2025) reports the same symptom
+(renders far from the capture poses are blurred) and no fix. Licences: most of these build on the Inria code or
+do not state a licence, so only the papers' equations are used.
+
 ## Where Q11 stands
 
 Better, not fixed. Sector views on the van are still 4.4 dB below ordinary held-out views and still show streaks
 and smeared lettering. For views from a height the capture never visited, most of the gap is missing coverage
 (3.5 dB van, 2.2 dB bedroom); neighbouring-view consistency, a larger splat budget and the High preset do not
-move what is left. The other two trainers show the same softness, but Metal is 0.7 to 1.0 dB behind them on
-these splits, which is the next thing to explain. Not yet tried: a photo-only capture, and
+move what is left. The other two trainers show the same softness. Metal was 0.7 to 1.0 dB behind them because of
+opacity resets and the colour grid running on locked-exposure captures; both are proposed default changes. Not yet tried: a photo-only capture, and
 anything aimed at held-out views in general (pose and exposure refinement at test time, the Q7 bilateral grid).

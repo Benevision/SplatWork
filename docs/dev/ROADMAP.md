@@ -129,6 +129,11 @@ Each item is a known defect with evidence; fix, measure, tick.
       *Other trainers, same split: the softness is in all three. Metal is behind: van low views Metal 20.22,
       gsplat 19.85 (480,577 splats), Vulkan 21.21; bedroom 20.05 / 20.75 / 20.82. Next: find what Vulkan does
       differently from Metal on the van (needles 23 % against 40 %).*
+      *Explained: Metal resets opacities every 3,000 steps (the other two never do) and runs the colour grid on
+      locked-exposure captures (the other two switch correction off). Metal with both off matches Vulkan: van
+      low views 20.22 → 21.24 (Vulkan 21.21), needles 39.5 % → 22.1 %; bedroom 20.05 → 20.68 (Vulkan 20.82).
+      Next, one default per commit with the benchmark: grid off when exposure is locked on the Mac, then resets.
+      Research review of 17 supplied documents: ranked tests in Q11_OFF_ANGLE.md.*
 - [ ] **Fog in exports** (Q2): run the invisible-splat census (Auto clean) automatically at the end of training
       and after a block merge; the only prune today is opacity above 0.005.
 - [ ] **Presets leave too little refinement** (Q3): `densifyStop` stored as a fraction of the steps (about 0.5) in
@@ -278,7 +283,7 @@ Update this table whenever an issue is touched. "Fixes so far" is there so the n
 | Q4 | Resume restarts the optimiser (Mac); crash loses the run (Linux) | Adam moments zeroed on load; resume state written only on pause | — | Open |
 | Q5 | Remote and local solves differ | Different features and engines; stats and log lines dropped | — | Open |
 | Q6 | Pose refinement outliers | 17 of 431 cameras differ by 20–28 cm between two solves of one capture | PoseSanity | Open |
-| Q7 | Colour correction absorbs scene colour | Drone held-out 14.9 → 9.3 dB; fired on both collapsed van blocks | 4 (off when exposure locked, opt-in, on by default, safeguard) | Open: needs one design. 2026-11-17: the safeguard fired on every Mac adaptive run because it ran on the step of an opacity reset (fixed: waits 500 steps). With the grid then staying on, ordinary held-out PSNR is about 1 dB lower on the van and 0.5 dB on the bedroom than with it off ([Q11_OFF_ANGLE.md](Q11_OFF_ANGLE.md)) |
+| Q7 | Colour correction absorbs scene colour | Drone held-out 14.9 → 9.3 dB; fired on both collapsed van blocks | 4 (off when exposure locked, opt-in, on by default, safeguard) | Open: needs one design. 2026-11-17: the safeguard fired on every Mac adaptive run because it ran on the step of an opacity reset (fixed: waits 500 steps). With the grid then staying on, ordinary held-out PSNR is about 1 dB lower on the van and 0.5 dB on the bedroom than with it off ([Q11_OFF_ANGLE.md](Q11_OFF_ANGLE.md)). 2026-11-18: the grid is on by default only on the Mac, and the Mac's locked-exposure rule does not cover it, so on SplatWork Capture data Metal trains with it while gsplat and Vulkan train with no correction; grid off gives +0.55 to +0.65 dB on low views and +0.4 to +0.6 dB on ordinary held-out views (van, bedroom). Proposed: the locked-exposure rule switches the grid off too |
 | Q8 | Block seams and per-block colour | Hard crop by centre; per-block grid mean; sky from one block | none; never measured | Open (milestone 5) |
 | Q9 | Camera solve fragility (video, fisheye, drone) | About 12 fix commits; drone places 904 of 1,225 photos | many | Partly solved; needs benchmark numbers |
 | Q11 | Off-angle views smear into needles and streaks | Van capture, adaptive, 2026-11-17: clean from the capture direction, broken lettering and streaks from a side angle; earlier sliding-door report. Measured with the holdout-sector score (`tools/eval/novel_views.py sector`, [Q11_OFF_ANGLE.md](Q11_OFF_ANGLE.md)): van sector 15.04 dB against 19.99 dB for ordinary held-out photos | 1 that worked (2026-11-17): the Mac's adaptive strategy pruned every splat drawn wider than 10 % of a photo, deleting close-range surfaces while it densified; removed, with no reset on the last densify step and no evaluation right after a reset → van sector 17.84 dB (+2.8), ordinary 22.24 (+2.3); bedroom sector +1.3, ordinary +0.9. Measured and not adopted (all within ±0.3 dB noise): needle limit 4, flatness, LiDAR depth weight 0.5, SH degree 1, SH band penalty, solid-or-gone opacity (kept as an off-by-default Mac option: 38 % fewer splats), contribution pruning (40 % fewer splats, same scores); `opacityReg` 0.001 earlier | **Open, improved.** Sector views are still 4.4 dB below ordinary ones. Next: multi-view depth / normal consistency (PGSR style, not yet implemented); how much of the gap is missing coverage; the same sector split on gsplat and Vulkan |
@@ -385,6 +390,10 @@ trainers and measure it on the benchmark. Test (c) is needed only if a noise fix
 |---|---|---|---|
 | Densification | Hybrid: error-guided growth + relocation + AbsGS split + exchange at cap | 3 | Both GPL competitors converged here; implement from papers |
 | Anti-aliasing | Mip-Splatting 3D filter | 3 | Low cost |
+| Opacity | Decay in place of the periodic reset (Hahlbohm et al., StopThePop) | 1 (Q11) | Resets make needles on the van; one line per trainer |
+| Pruning | Contribution pruning, max α × transmittance under 0.01 (RadSplat) | 1 (Q2, Q11) | Paper: no quality loss with a third fewer splats |
+| Training loop | Several photos per step (MVGS) | 3 | Paper: +0.6 dB, up to 8× time; try 2 per step |
+| Rasteriser | Perspective-correct splat evaluation, sorted first-16 blending (Hahlbohm et al.) | after 6 | New rasterisers in every trainer and viewer; gain is at close range and in motion |
 | Appearance | PPISP vs bilateral grid | 3 | Apache-2.0 references in gsplat / 3dgrut |
 | Geometry | Depth / normal priors only on inconsistent regions; PGSR-style multi-view planar consistency later | 3, later | Mesh export depends on this |
 | Initialisation | Dense matcher / MVS / depth-fusion init | 3 | In progress |
