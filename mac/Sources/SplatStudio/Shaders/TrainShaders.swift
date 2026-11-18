@@ -1282,7 +1282,7 @@ kernel void adam_sh_compact(device float* param [[buffer(0)]], device const floa
 // 3DGS-MCMC: perturb positions of low-opacity gaussians along their covariance (SGLD noise).
 kernel void mcmc_noise(device float* pos [[buffer(0)]], device const float* logScale [[buffer(1)]],
                        device const float* quat [[buffer(2)]], device const float* opLogit [[buffer(3)]],
-                       constant float4& np [[buffer(4)]],  // x: noiseLR * lrPos, y: seed, z: n, w: noiseMaxSigma
+                       constant float4& np [[buffer(4)]],  // x: noiseLR * lrPos, y: seed, z: n
                        uint i [[thread_position_in_grid]]) {
     if (i >= uint(np.z)) return;
     float o = 1.0f / (1.0f + exp(-opLogit[i]));
@@ -1295,9 +1295,8 @@ kernel void mcmc_noise(device float* pos [[buffer(0)]], device const float* logS
     float4 q = float4(quat[i*4], quat[i*4+1], quat[i*4+2], quat[i*4+3]);
     float ql = length(q); q = ql > 1e-12f ? q / ql : float4(1,0,0,0);
     float3x3 R = quat_to_rot(q);
-    float3 w = s * s * k;
-    if (np.w > 0.0f) w = min(w, np.w * s);   // at most np.w standard deviations along each axis (roadmap Q1)
-    float3 d = R * (w * (transpose(R) * e));
+    float3x3 M = float3x3(R[0] * s.x, R[1] * s.y, R[2] * s.z);
+    float3 d = (M * transpose(M)) * e * k;
     pos[i*3] += d.x; pos[i*3+1] += d.y; pos[i*3+2] += d.z;
 }
 

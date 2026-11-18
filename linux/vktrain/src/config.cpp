@@ -115,7 +115,7 @@ std::map<std::string, Field> fieldMap(TrainConfig& c) {
         {"opacityReg", {Field::Float, &c.opacityReg}},
         {"scaleReg", {Field::Float, &c.scaleReg}},
         {"noiseLR", {Field::Float, &c.noiseLR}},
-        {"noiseMaxSigma", {Field::Float, &c.noiseMaxSigma}},
+        {"mcmcGrowthMaxFaint", {Field::Float, &c.mcmcGrowthMaxFaint}},
         {"antialiased", {Field::Bool, &c.antialiased}},
         {"depthWeight", {Field::Float, &c.depthWeight}},
         {"background", {Field::Str, &c.background}},
@@ -255,7 +255,7 @@ void TrainConfig::validate() const {
         {"lrRotation", lrRotation}, {"bilateralGridLR", bilateralGridLR}};
     for (auto& [name, v] : pos) need(v > 0, std::string(name) + " must be > 0");
     const std::pair<const char*, double> nonneg[] = {{"opacityReg", opacityReg}, {"scaleReg", scaleReg},
-        {"noiseLR", noiseLR}, {"noiseMaxSigma", noiseMaxSigma}, {"depthWeight", depthWeight}, {"densifyGradThreshold", densifyGradThreshold},
+        {"noiseLR", noiseLR}, {"mcmcGrowthMaxFaint", mcmcGrowthMaxFaint}, {"depthWeight", depthWeight}, {"densifyGradThreshold", densifyGradThreshold},
         {"bilateralGridTV", bilateralGridTV}, {"backgroundShell", double(backgroundShell)}};
     for (auto& [name, v] : nonneg) need(v >= 0, std::string(name) + " must be >= 0");
 }

@@ -1073,7 +1073,7 @@ final class MetalTrainer: @unchecked Sendable {
         if let skybox, !v.holdout { skybox.encodeStep(enc, ctx: ctx) }
         if config.strategy == .mcmc && config.noiseLR > 0 {
             enc.memoryBarrier(scope: .buffers)
-            var np = SIMD4<Float>(config.noiseLR * lrPos, Float(bitPattern: UInt32(truncatingIfNeeded: rng.next())), Float(n), config.noiseMaxSigma)
+            var np = SIMD4<Float>(config.noiseLR * lrPos, Float(bitPattern: UInt32(truncatingIfNeeded: rng.next())), Float(n), 0)
             for k in 0..<4 { enc.setBuffer(params[k], offset: 0, index: k) }
             enc.setBytes(&np, length: 16, index: 4)
             enc.dispatch1D(ctx.pipeline("mcmc_noise"), count: n)
@@ -1595,6 +1595,8 @@ final class MetalTrainer: @unchecked Sendable {
                 if config.longAxisSplit { spreadAlongLongAxis(sources: src, copies: dead) }
             }
         }
+        // roadmap Q1: no new splats while too many are nearly transparent
+        if config.mcmcGrowthMaxFaint > 0 && Float(dead.count) > config.mcmcGrowthMaxFaint * Float(n) { return }
         // grow by 5 % up to the cap
         // 5 % per pass (3DGS-MCMC), or faster when that pace could not reach the budget before
         // densification ends (sparse initialisations).

@@ -258,6 +258,7 @@ McmcResult mcmcRefine(SplatState& s, const McmcParams& prm, HostRng& rng) {
     // _add_new_gs: grow by 5 % up to the cap, new copies of splats sampled by opacity
     int64_t target = std::min<int64_t>(prm.capMax, int64_t(1.05 * n));
     int64_t add = std::max<int64_t>(0, target - n);
+    if (prm.growthMaxFaint > 0 && double(dead.size()) > prm.growthMaxFaint * double(n)) add = 0;   // roadmap Q1
     if (add > 0) {
         std::vector<double> all(static_cast<size_t>(n));
         for (int i = 0; i < n; i++) all[size_t(i)] = sigmoid(s.p.opLogit[size_t(i)]);
@@ -273,21 +274,17 @@ McmcResult mcmcRefine(SplatState& s, const McmcParams& prm, HostRng& rng) {
     return res;
 }
 
-void mcmcNoise(SplatState& s, float scaler, uint32_t seed, uint32_t step, float maxSigma) {
+void mcmcNoise(SplatState& s, float scaler, uint32_t seed, uint32_t step) {
     for (int i = 0; i < s.n(); i++) {
         float o = 1.0f / (1.0f + std::exp(-s.p.opLogit[size_t(i)]));
         float gate = 1.0f / (1.0f + std::exp(-100.0f * ((1.0f - o) - 0.995f)));
         if (gate * scaler == 0.0f) continue;
         double e[3];
-        for (uint32_t k = 0; k < 3; k++) e[k] = double(hashNormal(seed, step, uint32_t(i), k));
+        for (uint32_t k = 0; k < 3; k++) e[k] = double(hashNormal(seed, step, uint32_t(i), k)) * gate * scaler;
         double R[3][3];
         quatRot(&s.p.quat[size_t(i) * 4], R);
         double s2[3];
-        for (int k = 0; k < 3; k++) {
-            double sd = std::exp(double(s.p.logScale[size_t(i) * 3 + k]));
-            s2[k] = sd * sd * double(gate) * double(scaler);
-            if (maxSigma > 0.0f) s2[k] = std::min(s2[k], double(maxSigma) * sd);
-        }
+        for (int k = 0; k < 3; k++) s2[k] = std::exp(2.0 * s.p.logScale[size_t(i) * 3 + k]);
         double u[3];
         for (int c = 0; c < 3; c++) u[c] = (R[0][c] * e[0] + R[1][c] * e[1] + R[2][c] * e[2]) * s2[c];
         for (int r = 0; r < 3; r++) s.p.pos[size_t(i) * 3 + r] += float(R[r][0] * u[0] + R[r][1] * u[1] + R[r][2] * u[2]);

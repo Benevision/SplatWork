@@ -31,9 +31,9 @@ struct TrainingConfig: Codable, Equatable {
     var opacityReg: Float = 0.01
     var scaleReg: Float = 0.01
     var noiseLR: Float = 500_000
-    /// Limit on the MCMC position noise: a splat moves at most this many of its own standard deviations per step
-    /// along each of its axes (0 = no limit). Roadmap Q1.
-    var noiseMaxSigma: Float = 0
+    /// MCMC adds no splats on a refinement pass where more than this share of the splats is nearly transparent
+    /// (opacity ≤ `pruneOpacity`); relocation still runs. 0 = off. Roadmap Q1.
+    var mcmcGrowthMaxFaint: Float = 0
     var antialiased = true
     var depthWeight: Float = 0.1
     var background: Background = .random
@@ -134,7 +134,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.pruneOpacity, &pruneOpacity); d(.lrPosition, &lrPosition); d(.lrPositionFinal, &lrPositionFinal)
         d(.lrColor, &lrColor); d(.lrSHRest, &lrSHRest); d(.lrOpacity, &lrOpacity); d(.lrScale, &lrScale)
         d(.lrRotation, &lrRotation); d(.ssimWeight, &ssimWeight); d(.opacityReg, &opacityReg); d(.scaleReg, &scaleReg)
-        d(.noiseLR, &noiseLR); d(.noiseMaxSigma, &noiseMaxSigma); d(.antialiased, &antialiased); d(.depthWeight, &depthWeight); d(.background, &background)
+        d(.noiseLR, &noiseLR); d(.mcmcGrowthMaxFaint, &mcmcGrowthMaxFaint); d(.antialiased, &antialiased); d(.depthWeight, &depthWeight); d(.background, &background)
         d(.initialOpacity, &initialOpacity); d(.randomInitCount, &randomInitCount); d(.seed, &seed)
         d(.previewInterval, &previewInterval); d(.evalInterval, &evalInterval)
         d(.transientMasking, &transientMasking); d(.transientSensitivity, &transientSensitivity); d(.transientStart, &transientStart)

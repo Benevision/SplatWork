@@ -47,7 +47,7 @@ struct TrainConfig {
     double opacityReg = 0.01;
     double scaleReg = 0.01;
     double noiseLR = 500000.0;
-    double noiseMaxSigma = 0.0;   // limit on MCMC noise, in a splat's own standard deviations (0: none)
+    double mcmcGrowthMaxFaint = 0.0;   // MCMC: no growth while more than this share is nearly transparent (0: off)
     bool antialiased = true;
     double depthWeight = 0.0;
     std::string background = "random";

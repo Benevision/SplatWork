@@ -726,7 +726,7 @@ void testTrainingKernels(Context& ctx, GpuSplat& gs) {
     // ---- MCMC noise: the kernel against the host implementation (the same counter-based normals)
     {
         float scaler = 40.0f;
-        struct { float scaler; uint32_t seed, step, n; float maxSigma; } pc{scaler, 42u, 1234u, n, 0.0f};
+        struct { float scaler; uint32_t seed, step, n; } pc{scaler, 42u, 1234u, n};
         ctx.begin();
         ctx.dispatch("mcmc_noise", {&gs.params[0], &gs.params[1], &gs.params[2], &gs.params[3]}, &pc, sizeof pc, (n + 255) / 256);
         ctx.submitWait();

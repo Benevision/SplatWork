@@ -1094,7 +1094,6 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             float noiseScaler = mcmc ? float(lr0 * std::pow(gamma, double(step + 1)) * cfg.noiseLR) : 0.0f;
             if (mcmc && !refineNow) {
                 ex.noiseScaler = noiseScaler;
-                ex.noiseMaxSigma = float(cfg.noiseMaxSigma);
                 ex.noiseSeed = uint32_t(cfg.seed);
                 ex.noiseStep = uint32_t(step);
             }
@@ -1131,8 +1130,9 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                 McmcParams mp;
                 mp.capMax = cfg.maxGaussians;
                 mp.minOpacity = cfg.pruneOpacity;
+                mp.growthMaxFaint = cfg.mcmcGrowthMaxFaint;
                 mcmcRefine(s, mp, rng);
-                mcmcNoise(s, noiseScaler, uint32_t(cfg.seed), uint32_t(step), float(cfg.noiseMaxSigma));
+                mcmcNoise(s, noiseScaler, uint32_t(cfg.seed), uint32_t(step));
                 if (cfg.longAxisSplit) spreadCloneGroups(s);
                 upload(s);
             } else if (!mcmc && step < densifyStop) {

@@ -52,13 +52,13 @@ SplatState initSplats(const std::vector<float>& xyz, const std::vector<float>& r
 struct McmcParams {
     int64_t capMax = 1500000;
     double minOpacity = 0.005;
+    double growthMaxFaint = 0.0;   // no growth on a pass where more than this share is dead (0: off)
 };
 struct McmcResult { size_t relocated = 0, added = 0; };
 // gsplat MCMCStrategy refinement (relocate, then add) on the host copy.
 McmcResult mcmcRefine(SplatState& s, const McmcParams& prm, HostRng& rng);
 // gsplat inject_noise_to_position, host version of shaders/mcmc_noise.comp.
-// maxSigma > 0 limits the step along each axis to maxSigma × the splat's standard deviation on that axis.
-void mcmcNoise(SplatState& s, float scaler, uint32_t seed, uint32_t step, float maxSigma = 0.0f);
+void mcmcNoise(SplatState& s, float scaler, uint32_t seed, uint32_t step);
 // trainer.py spread_clone_groups: returns the number of splats moved.
 size_t spreadCloneGroups(SplatState& s);
 

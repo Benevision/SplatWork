@@ -6,6 +6,11 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.7.18 — an experimental MCMC growth pause (off by default); the 1.7.16 noise limit is
+  removed.** The noise limit `noiseMaxSigma` was measured and did not help, so it is gone. The 1.7.17 statistics
+  showed what the failing runs do: most splats go nearly transparent and drift away from the scene. The new setting
+  `mcmcGrowthMaxFaint` (all three trainers, 0 = off) adds no splats on a pass where more than that share of the
+  splats is nearly transparent. Not measured yet; see roadmap issue Q1.
 - **SplatWork for Linux 1.7.17 — MCMC training logs splat statistics.** Every 500 steps the NVIDIA (gsplat) trainer
   writes one line to the job log: how many splats are faint enough to receive noise, their sizes, how close they
   are to a camera and how much screen they cover. It changes nothing about training; it is there to find why MCMC
