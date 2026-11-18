@@ -361,6 +361,19 @@ next Linux change. Three fixes have now failed (noise limit, weaker noise, growt
 configuration measured at this cap is `noiseLR` 0. Open: whether a 1 M cap with default noise is stable on gsplat
 too (it was on Vulkan, `j02233f519bc`), and how a full noise-off run scores on held-out views against Adaptive.
 
+**Q1 full run with noise off, 2026-11-18 (job `j1aea8a07ae5`, gsplat, RTX 4080, block 1, cap 3.1 M, `noiseLR` 0,
+60,000 steps):** it trains to the end without collapsing. Training-view PSNR, mean of the logged steps: 22.9 dB
+at 20,000–25,000, 24.2 at 30,000–35,000, 25.9 over the last 5,000 (25.3 at step 60,000). Adaptive on the same
+block (`j1db72b4612d`, 375 k splats while training, 211 k written): 22.6, 23.0 and 24.5 (24.0 at step 60,000). So
+noise-off MCMC is about 1.4 dB higher on training views, with three caveats. (1) The dataset has no held-out
+photos, and training-view scores favour the run with more splats, so this does not show it is better from new
+angles. (2) Most of the budget is wasted: at step 60,000, 74% of the splats are under opacity 0.005 and the
+median size is zero (18% at 15,000, 28% at 20,000, 73% at 50,000). Without noise, dead splats are never moved
+anywhere useful once relocation stops at step 19,000, so about 0.8 M of the 3.1 M do the work. (3) It took
+8,435 s against 2,905 s, and the file holds all 3.1 M splats. Next: the same pair with a held-out set, and a
+noise-off run capped near 1 M, which should match this one at a third of the cost if the dead share is the
+whole story.
+
 No default has changed. Next: find why the default noise diverges on this scene and not at a 1 M cap (the noise
 is scaled by each splat's covariance and by low opacity, so large faint splats move furthest), then fix the form
 of the noise (for example a cap on the step relative to the splat's size or the scene extent) in all three
