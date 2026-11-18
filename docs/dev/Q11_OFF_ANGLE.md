@@ -201,10 +201,47 @@ Most of the smear from below is therefore surfaces and angles no training photo 
 cannot invent: the remedy is capture (a low pass and a high pass) and telling the user when a height band is
 missing. The roadmap fixes were tested against the part that coverage explains, which is why none registered.
 
+### Neighbouring-view photo consistency (b), on the thinned split
+
+Tried in the Metal trainer and removed again. The rendered depth of each pixel places it in 3D; that point is
+projected into one of the four nearest training photos looking within 30 degrees, and the difference between the two
+photos there (grey, local 5 x 5 mean removed so exposure drops out; differences over 0.1 skipped as occlusion) is a
+loss whose gradient goes to the rendered depth. This is the multi-view photometric idea of PGSR, per pixel; PGSR's
+plane patches, NCC and forward-backward geometric check were not built. Van, the same 33 low views:
+
+| run | 33 low views PSNR | SSIM | normal PSNR | SSIM |
+|---|---:|---:|---:|---:|
+| current trainer | 20.22 | 0.6512 | 22.33 | 0.6684 |
+| weight 0.3 | 20.35 | 0.6465 | 22.11 | 0.6673 |
+| weight 1 | 20.32 | 0.6528 | 22.02 | 0.6630 |
+| weight 10 | 20.47 | 0.6598 | 22.15 | 0.6672 |
+
+All within the 0.3 dB noise, including a weight 100 times the depth loss's. On captures with LiDAR depth the
+surface position is already fixed, so there is little left for this term to correct. Not tested on a photo-only
+capture, where it has more to do.
+
+### Photogrammetry on the same photos (Apple Object Capture, full detail)
+
+To see what a mesh method makes of the same views: the 348 training photos of the thinned split, photos only
+(no LiDAR depth, no ARKit poses), 20 minutes on the M4 Pro.
+
+- Its structure-from-motion registered 295 of 348 photos, and only 169 of those agree with the ARKit poses (median
+  4 cm after a similarity fit). The other 126, mostly the first 130 photos, are placed up to 177 degrees wrong:
+  the two sides of the van were confused. The mesh there is ghost geometry.
+- Where its poses are right (21 of the 33 held-out low views): matte surfaces (the bags, floor and fittings inside
+  the van) are sharper in the mesh than in the splat; the glossy white and green bodywork is torn, doubled or
+  missing in the mesh and whole in the splat.
+- PSNR on those 21 views: mesh 11.8 dB, splat 19.5 dB. The mesh number is dominated by the 4 cm alignment error
+  and its unlit texture, so it only says the mesh is not a pixel-accurate renderer; the comparison is by eye.
+
+What this says about Q11: a mesh has one opaque surface, so matte detail holds from any angle, and that is where
+the splat is soft from below (blurred, not streaked, on the interior views). Reflective bodywork is the reverse.
+The splat's softness on those views points at detail (splat budget and resolution on rarely seen surfaces) more
+than at geometry.
+
 ## Where Q11 stands
 
 Better, not fixed. Sector views on the van are still 4.4 dB below ordinary held-out views and still show streaks
-and smeared lettering. Not yet tried: multi-view depth / normal consistency between neighbouring views (b: with LiDAR depth already
-tying every view to one surface it is not expected to help these two scenes), a run
+and smeared lettering. Not yet tried: a run
 with the 43 nearest cameras restored to see how much of the sector gap is missing coverage, the High preset, and
 the gsplat and Vulkan trainers on the same sector split.
