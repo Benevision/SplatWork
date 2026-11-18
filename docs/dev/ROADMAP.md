@@ -319,6 +319,25 @@ Next: stop testing blind. Log splat statistics during an MCMC run (share with th
 percentiles, distance to the nearest camera, tile intersections per splat) and compare a healthy and a
 collapsing run at the same step; this is part of milestone 0's divergence guard.
 
+**Q1 splat statistics, 2026-11-18 (Linux 1.7.17, same settings; sizes and distances as a share of the scene
+extent):** with noise, most splats go nearly transparent and drift away from the scene; they do not grow.
+
+| At step 9,500 | Default noise (`j029164f6dbf`, 11.4 dB) | Noise off (`jab6e1567c87`, 18–19 dB) |
+|---|---|---|
+| Opacity under 0.005 (noise gate open, counted dead by relocation) | 73.0% (15.9% at 4,500) | 22.0% (17.2% at 6,000) |
+| Opacity under 0.05 | 96.0% | 71.1% |
+| Median distance to the nearest camera | 0.72 (0.19 at 4,500; 0.88 at 10,000) | 0.16 |
+| Median size | 0.0077 | 0.0026 |
+| Largest screen radius in one render | 19,446 px (44,934 at 10,000) | 3,445 px |
+
+Reading (not yet tested): a runaway. Faint splats get full noise, walk off the surfaces to where no photo
+constrains them, stay faint, and are relocated onto the live splats, whose opacity is shared out among the
+copies; 5% growth per 100 steps adds to it. Above some share of faint splats the live ones are diluted faster
+than training restores them. A few splats that end up next to a camera explain the out-of-memory failures.
+Fix candidates, to measure one at a time: (1) no growth while the faint share is high (for example over 30%);
+(2) no noise for a splat no training camera sees; (3) a cap that follows what the scene needs rather than
+`maxGaussians` (the hybrid capped strategy of milestone 3). `noiseMaxSigma` is still to be removed.
+
 No default has changed. Next: find why the default noise diverges on this scene and not at a 1 M cap (the noise
 is scaled by each splat's covariance and by low opacity, so large faint splats move furthest), then fix the form
 of the noise (for example a cap on the step relative to the splat's size or the scene extent) in all three
