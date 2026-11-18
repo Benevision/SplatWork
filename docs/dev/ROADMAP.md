@@ -133,6 +133,10 @@ Each item is a known defect with evidence; fix, measure, tick.
       locked-exposure captures (the other two switch correction off). Metal with both off matches Vulkan: van
       low views 20.22 → 21.24 (Vulkan 21.21), needles 39.5 % → 22.1 %; bedroom 20.05 → 20.68 (Vulkan 20.82).
       Grid off when exposure is locked: done on the Mac (measured as predicted). Next: resets.
+      Web research: no published training-side change recovers more than 0.2 dB on extrapolated views (Mind
+      the Gap, arXiv 2607.01556); coverage and generative repair (Difix3D+) do. Warped pseudo-views from LiDAR
+      depth, measured: van 16.79 → 16.83, bedroom 17.84 → 17.63 on unseen low views, ordinary views −0.4 to
+      −0.5 dB; not adopted.
       Research review of 16 supplied documents: ranked tests in Q11_OFF_ANGLE.md.*
 - [ ] **Fog in exports** (Q2): run the invisible-splat census (Auto clean) automatically at the end of training
       and after a block merge; the only prune today is opacity above 0.005.

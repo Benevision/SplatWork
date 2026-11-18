@@ -365,6 +365,49 @@ multi-view patch loss is the term already measured here with no gain. Chougule (
 (renders far from the capture poses are blurred) and no fix. Licences: most of these build on the Inria code or
 do not state a licence, so only the papers' equations are used.
 
+## What others have measured (web research, 2026-11-18)
+
+Read directly unless marked; numbers are the sources' own.
+
+- **Mind the Gap** (Jia and Appia, arXiv 2607.01556): a contiguous sector held out on dense captures, as here. The
+  gap to interpolated views is 3.2 to 11.1 dB (mean 5.8) for 3DGS, Mip-Splatting and 3DGS-MCMC alike, and 3.7 dB
+  in Instant-NGP, so it is not specific to splats. Error grows with angular distance to the nearest training
+  view (r = −0.58). Training-side changes on extrapolated views: SH-degree annealing +0.17 dB, a view-dependent
+  colour penalty +0.12, scale regularisation +0.09; splat dropout −0.39, camera jitter −2.85, opacity entropy
+  with virtual cameras −3.10. One extra photo placed farthest from any training view: +0.60 dB over a random one.
+  38 % of the gap is view-dependent colour.
+- **EVPGS** (Li et al., CVPR 2025): trains on low views, tests on raised ones. Its network-free stage (training
+  photos re-projected into pseudo-views through depth, hidden pixels masked) gives +0.2 to +0.4 dB on object
+  scenes. Tested below.
+- **Difix3D+** (Wu et al., CVPR 2025): a diffusion model repairs renders at off-path cameras and the repaired
+  views are trained on: 17.66 → 18.51 dB, LPIPS 0.327 → 0.264. The successor model `nvidia/Fixer` is under the
+  NVIDIA Open Model License (commercial use allowed, attribution required) and runs on NVIDIA GPUs only.
+- **ViewExtrapolator**, **EUVS** (summary only): geometry priors alone do not fix extrapolation.
+- **Effective rank** (Hyung et al., NeurIPS 2024): a penalty that acts on needles and not on discs; +0.3 dB on
+  outdoor Mip-NeRF 360, interpolated views only.
+- Dropout methods (DropGaussian, co-adaptation, SE-GS) are sparse-view results (3 to 24 photos).
+
+In short: nobody reports closing this gap by changing training alone; coverage, or new observations from a
+generative model, are what move it.
+
+### Warped pseudo-views from LiDAR depth (2026-11-18)
+
+`tools/eval/experiments/warp_pseudo_views.py`: every fourth training photo is re-drawn from cameras 0.25 m and
+0.5 m lower through its own sensor depth; pixels that fail a depth agreement test, lie on depth edges or have
+no depth are masked; the warped depth is supplied too. All low photos held out, Metal with change 4, Balanced.
+
+| scene | run | 65 / 67 low views PSNR | SSIM | normal PSNR | SSIM | splats |
+|---|---|---:|---:|---:|---:|---:|
+| van | no pseudo-views | 16.79 | 0.5899 | 22.77 | 0.7108 | 734,813 |
+| van | + 141 pseudo-views (53 % valid) | 16.83 | 0.6004 | 22.40 | 0.7056 | 535,905 |
+| bedroom | no pseudo-views | 17.84 | 0.5525 | 21.83 | 0.6683 | 800,000 |
+| bedroom | + 158 pseudo-views (65 % valid) | 17.63 | 0.5465 | 21.35 | 0.6599 | 800,000 |
+
+Not adopted: no gain on the low views (+0.04 and −0.21 dB) and 0.4 to 0.5 dB lost on ordinary held-out views.
+A warped photo holds only what its source photo saw, displaced by a 256 × 192 depth map, so it adds
+misalignment and no new surface. Untested variant: depth rendered from the trained splat in place of sensor
+depth (EVPGS uses a mesh from the splat).
+
 ## Where Q11 stands
 
 Better, not fixed. Sector views on the van are still 4.4 dB below ordinary held-out views and still show streaks
