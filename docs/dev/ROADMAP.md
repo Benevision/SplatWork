@@ -383,6 +383,28 @@ anywhere useful once relocation stops at step 19,000, so about 0.8 M of the 3.1 
 noise-off run capped near 1 M, which should match this one at a third of the cost if the dead share is the
 whole story.
 
+**Correction, 2026-11-20:** the Adaptive reference above (`j1db72b4612d`) ran on the **Vulkan** trainer, not gsplat,
+so that 25.9 against 24.5 dB compares two trainers as well as two strategies. It is not like for like.
+
+**Q1 held-out comparison, 2026-11-18 (gsplat, RTX 4080, Linux 1.7.18, block 1, 322 training photos, 44 held-out
+photos: every eighth photo whose two neighbours are in the block; 60,000 steps):**
+
+| Run | Job | Held-out PSNR | Held-out SSIM | Training PSNR (last 5,000) | Splats | Time |
+|---|---|---:|---:|---:|---:|---:|
+| MCMC, `noiseLR` 0, cap 1 M | `j510d2cfa149` | 20.82 dB | 0.612 | 25.0 dB | 1,000,000 | 6,872 s |
+| Adaptive | `j483670f28fd` | 18.60 dB | 0.576 | 21.5 dB | 33,060 | 5,933 s |
+
+Held-out PSNR along the way (MCMC / Adaptive): 18.9 / 16.3 at 10,000, 20.1 / 17.1 at 20,000, 20.5 / 18.3 at
+30,000, 20.7 / 18.5 at 40,000. Noise-off MCMC at 1 M is stable and 2.2 dB ahead on held-out views, but the
+baseline is weak: **gsplat's Adaptive strategy ends with 33,060 splats on this block** (it starts from 38,144
+points, peaks near 67,000 and is pruned back), where the Vulkan trainer's Adaptive reached 375,000 and 24.5 dB on
+training views. That under-densification is a separate fault in the gsplat trainer and needs its own entry before
+this pair says anything about MCMC against Adaptive in general. The 1 M cap costs 0.9 dB on training views
+against the 3.1 M run (25.0 against 25.9), so the dead splats are not the whole story; 65% of the 1 M are still
+under opacity 0.005 at the end. The gap between training and held-out views is 4.2 dB for MCMC. Next: find why
+gsplat Adaptive does not densify here, then repeat this pair; a Vulkan Adaptive run with the same 44 held-out
+photos would give the missing cross-trainer number.
+
 No default has changed. Next: find why the default noise diverges on this scene and not at a 1 M cap (the noise
 is scaled by each splat's covariance and by low opacity, so large faint splats move furthest), then fix the form
 of the noise (for example a cap on the step relative to the splat's size or the scene extent) in all three
